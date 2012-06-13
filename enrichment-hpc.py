@@ -3,6 +3,7 @@
 
 import sqlite3
 import sys
+import os
 import json
 import multiprocessing
 from multiprocessing import Process
@@ -12,8 +13,8 @@ import hashlib
 import time
 
 
-ANNO_MAX_SIZE=500
-ANNO_MIN_SIZE=15
+ANNO_MAX_SIZE=2000
+ANNO_MIN_SIZE=10
 
 PVAL_CUTOFF = 0.05
 DIFF_AVG_CUTOFF = 1
@@ -56,7 +57,7 @@ def store_in_db(fn):
                 with sqlite3.connect(db_filename) as conn:
                     conn.executemany(store_results_sql, ({
                                 # the id field is there to prevent redundant entries
-                                'id': hashlib.md5('|'.join(t,dataset.id,factor,subset,year)).hexdigest(),
+                                'id': hashlib.md5('|'.join([t,dataset.id,factor,subset,year])).hexdigest(),
                                 'goid': t,
                                 'term': annotations[t]['name'],
                                 'pval': pval,
@@ -105,6 +106,14 @@ if __name__ == '__main__':
         sys.exit(1)
     file_or_accn = sys.argv[1]
     annotation_files = sys.argv[2:]
+    
+    # check that database exists and has results table 
+    try:
+        assert os.path.isfile(db_filename)
+        with sqlite3.connect(db_filename) as conn:
+            conn.execute('select * from results limit 1')
+    except (AssertionError, sqlite3.OperationalError):
+        print "Fatal: SQLite database '%s' not configured correctly. Run `python init_results_db.py force` to create database with correct schema." % db_filename
 
     # this file can be downloaded from Uniprot's mapping service
     uniprot2entrez_map = json.load(open(mapfile))

@@ -4,6 +4,6 @@
 #PBS -N gds1962-ea.job
 #PBS -j oe
 
-cd eanalysis
+cd go
 python enrichment-hpc.py GDS1962 data/goa-*.json
 

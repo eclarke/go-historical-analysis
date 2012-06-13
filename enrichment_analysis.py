@@ -113,6 +113,8 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
     # |    ng_e   | ng_ne |
 
     g_e = len(intersect1d(term_genes, diffexp)) - 1
+    if g_e < 1:
+        return 1.0
     g_ne = len(intersect1d(term_genes, not_diffexp))
     ng_e = len(intersect1d(not_term_genes, diffexp))
     ng_ne = len(intersect1d(not_term_genes, not_diffexp))

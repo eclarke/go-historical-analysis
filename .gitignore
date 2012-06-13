@@ -26,9 +26,10 @@ pip-log.txt
 #Mr Developer
 .mr.developer.cfg
 
-# SOFT files, gzip files
+# SOFT files, gzip files, results database
 *.soft
 *.gz
+results.db
 
 # emacs backups, etc
 \#*#
