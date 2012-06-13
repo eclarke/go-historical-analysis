@@ -9,6 +9,11 @@ from multiprocessing import Process
 from __init__ import fetch
 import enrichment_analysis as ea
 import hashlib
+import time
+
+
+ANNO_MAX_SIZE=500
+ANNO_MIN_SIZE=15
 
 PVAL_CUTOFF = 0.05
 DIFF_AVG_CUTOFF = 1
@@ -31,24 +36,40 @@ def split(annotation_dict, blocks=8):
     return returnlist
 
 
+def filter_size(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
+    """Removes annotations that are composed of more than 'max' genes
+    or fewer than 'min'. This returns a filtered copy."""
+    returndict = dict(annotation_dict)
+    for k, v in annotation_dict.iteritems():
+        if len(v['genes']) > _max or len(v['genes']) < _min:
+            del returndict[k]
+    print "Removed %d terms from annotation set." % (len(annotation_dict) - len(returndict))
+    return returndict
+
+
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
         results = fn(dataset, platform, factor, subset, annotations, year, u2emap)
-        with sqlite3.connect(db_filename) as conn:
-            cursor = conn.cursor()
-            cursor.executemany(store_results_sql, ({
-                # the id field is there to prevent redundant entries
-                'id': hashlib.md5('|'.join(t,dataset.id,factor,subset,year)).hexdigest(),
-                'goid': t,
-                'term': annotations[t]['name'],
-                'pval': pval,
-                'dataset': dataset.id,
-                'factor': factor,
-                'subset': subset,
-                'year': year} for t, pval in results.iteritems()))
-            conn.commit()
-            p = multiprocessing.current_process()
-            print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
+        p = multiprocessing.current_process()
+        while True:
+            try:
+                with sqlite3.connect(db_filename) as conn:
+                    conn.executemany(store_results_sql, ({
+                                # the id field is there to prevent redundant entries
+                                'id': hashlib.md5('|'.join(t,dataset.id,factor,subset,year)).hexdigest(),
+                                'goid': t,
+                                'term': annotations[t]['name'],
+                                'pval': pval,
+                                'dataset': dataset.id,
+                                'factor': factor,
+                                'subset': subset,
+                                'year': year} for t, pval in results.iteritems()))
+                    conn.commit()
+                break
+            except sqlite3.DatabaseError as e:
+                print("<%s> DatabaseError: %s. Sleeping for 2 seconds and retrying." % e.message)
+                time.sleep(2)
+        print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
 
 
@@ -78,11 +99,17 @@ def enriched(dataset, platform, factor, subset, annotations,
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        print("Usage: python enrichment-hpc.py <GDS file or accn> <annotation file 1> [more anno files...]")
+        print("\n See README.md for more information.")
+        sys.exit(1)
     file_or_accn = sys.argv[1]
     annotation_files = sys.argv[2:]
-    print annotation_files
+
+    # this file can be downloaded from Uniprot's mapping service
     uniprot2entrez_map = json.load(open(mapfile))
     assert len(uniprot2entrez_map) > 27000
+
     # import the dataset
     dataset = fetch(file_or_accn, destdir='data')
     dataset = dataset.to_numeric()
@@ -98,7 +125,8 @@ if __name__ == '__main__':
         for subset in dataset.factors[factor]:
             for annotations in annotation_years:
                 year = annotations['meta']['year']
-                blocks = split(annotations['anno'], blocks=NCORES)
+                filtered_annotations = filter_size(annotations['anno'])
+                blocks = split(filtered_annotations, blocks=NCORES)
                 print("-- [year: %s] [dataset: %s] [%s: %s] --" % (year, dataset.id, 
                                                                    factor, subset))
                 jobs = []

@@ -82,40 +82,44 @@ def main(file_or_accn, annotation_files):
 
 
 def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
+    """
+    Conducts a modified Fisher's exact test (aka EASE score) on the differentially 
+    expressed genes and the provided gene list for the term. The test is modified
+    to be more conservative in that it subtracts one from the 'intersection' cell
+    of the contingency table. For rationale, see PMCID: PMC328459. Near-identical 
+    to DAVID's Functional Annotation Tool.
+
+    Returns the p-value (the likelihood of that term being enriched against a null
+    distribution) for the term's gene set.
+
+    Arguments:
+    diffexp: a list of differentially expressed genes (in Entrez Gene id format)
+    not_diffexp: a list of genes *not* differentially expressed in the background
+    background: all genes (often all genes tested by the probe set)
+    term: a dict of the form {'name':'term name', 'genes':['1234','1235',...]}
+    """
+
     if not diffexp:
         return 1.0
 
-    term_genes = term['genes']
-    if len(term_genes) > 500 or len(term_genes) < 15:
-        return 1.0
     # convert Uniprot ids to Entrez Gene ids
-    assert uniprot2entrez_map
-
-    term_genes = map_uniprot(term_genes, uniprot2entrez_map)
+    term_genes = map_uniprot(term['genes'], uniprot2entrez_map)
 
     not_term_genes = [gene for gene in background if gene not in term_genes]
 
     # contingency table for fisher's exact test:
-    # |  g_e  | g_ne  |  (e = enriched, ne = not enriched,
-    # +–––––-–+–-–––––+   g = geneset,  ng = not geneset)
-    # |  ng_e | ng_ne |
-    #print "finding + + intersection: ",
-    g_e = len(intersect1d(term_genes, diffexp))
-    #print g_e
-    #print "finding + - intersection: ",
+    # |  g_e - 1  | g_ne  |  (e = diff. expressed, ne = not diff. expressed,
+    # +–––––-----–+–-–––––+   g = geneset,  ng = not geneset)
+    # |    ng_e   | ng_ne |
+
+    g_e = len(intersect1d(term_genes, diffexp)) - 1
     g_ne = len(intersect1d(term_genes, not_diffexp))
-    #print g_ne
-    #print "finding - + intersection: ",
     ng_e = len(intersect1d(not_term_genes, diffexp))
-    #print ng_e
-    #print "finding - - intersection: ",
     ng_ne = len(intersect1d(not_term_genes, not_diffexp))
-    #print ng_ne
-    #print "creating contingency table"
-    #table = array([[g_e, g_ne], [ng_e, ng_ne]])
-    #print "running fisher test"
-    odds, pval = stats.fisher_exact(array([[g_e, g_ne], [ng_e, ng_ne]]))
-    #print "returning pval"
+    table = array([[g_e, g_ne], [ng_e, ng_ne]])
+    
+    odds, pval = stats.fisher_exact(table)
+    
     return pval
 
 
