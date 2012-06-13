@@ -31,7 +31,7 @@ SCRIPT_CONTENTS = """
 #PBS -N {name}
 #PBS -j oe
 
-cd eanalysis
+cd go
 python enrichment-hpc.py {gds} data/goa-*.json
 """
 
@@ -47,7 +47,7 @@ def spawn(gds, after=None, dryrun=False):
     series_options = '-W depend=afterany:'+after if after else ''
     command = COMMAND.format(seriesopts=series_options,
                              scriptfile=script_file)
-    jobid = subprocess.check_output(command.split(' ')) if not dryrun else script_file
+    jobid = subprocess.check_call([x for x in command.split(' ') if x]) if not dryrun else script_file
     return jobid, command
 
 
@@ -75,10 +75,8 @@ if __name__ == "__main__":
     for i, accn in enumerate(accns):
         after = jobs[i-1] if i > 0 and (i % max_concurrent) == 0 else after
         job, command = spawn(accn, after=after, dryrun=dryrun)
-        print "launched with command: ", command
+        print "%s launched with command: '%s'" % (job, command)
         jobs.append(job)
-#    for job in jobs:
- #       print job
 
 
 
