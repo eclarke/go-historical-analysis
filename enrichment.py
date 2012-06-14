@@ -6,19 +6,22 @@ import sys
 import os
 import json
 import multiprocessing
-from multiprocessing import Process
-from __init__ import fetch
-import enrichment_analysis as ea
 import hashlib
 import time
 
+from multiprocessing import Process
+from collections import defaultdict
+
+from __init__ import fetch
+import enrichment_analysis as ea
+from Annotations import parse_flat
 
 ANNO_MAX_SIZE=2000
 ANNO_MIN_SIZE=10
 
 PVAL_CUTOFF = 0.05
 DIFF_AVG_CUTOFF = 1
-NCORES = 8
+NCORES = multiprocessing.cpu_count()
 
 db_filename = 'results.db'
 mapfile = 'data/uniprot2entrez.json'
@@ -37,9 +40,11 @@ def split(annotation_dict, blocks=8):
     return returnlist
 
 
-def filter_size(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
+def filter_annos(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
     """Removes annotations that are composed of more than 'max' genes
-    or fewer than 'min'. This returns a filtered copy."""
+    or fewer than 'min'.
+    This returns a filtered copy."""
+    
     returndict = dict(annotation_dict)
     for k, v in annotation_dict.iteritems():
         if len(v['genes']) > _max or len(v['genes']) < _min:
@@ -47,6 +52,25 @@ def filter_size(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
     print "Removed %d terms from annotation set." % (len(annotation_dict) - len(returndict))
     return returndict
 
+
+def restrict_subontology(annotation_dict, ontology, year):
+    base = {'MF': ('GO:0003674', 'Molecular Function'),
+            'CC': ('GO:0005575', 'Cellular Component'),
+            'BP': ('GO:0008150', 'Biological Process')}[ontology]
+    try:
+        onto = parse_flat("go-%s.flat" % year)
+    except IOError:
+        print("Warning: Flattened ontology file not found for year: %s. Create flattened ontology using go_flattener.jar.")
+        print("No subontology restriction done; using all terms from all ontologies.")
+        return annotation_dict
+    subontology = onto[base][0]
+    returndict = dict(annotation_dict)
+    for term in annotation_dict:
+        if not term in subontology:
+            del returndict[term]
+    print "Restricting to %s removed %d terms." % (onto[base][1], (len(annotation_dict) - len(returndict)))
+    return returndict
+            
 
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
@@ -68,7 +92,7 @@ def store_in_db(fn):
                     conn.commit()
                 break
             except sqlite3.DatabaseError as e:
-                print("<%s> DatabaseError: %s. Sleeping for 2 seconds and retrying." % e.message)
+                print("<%s> DatabaseError: %s. Sleeping for 2 seconds and retrying." % (p.name, e))
                 time.sleep(2)
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
@@ -101,11 +125,12 @@ def enriched(dataset, platform, factor, subset, annotations,
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print("Usage: python enrichment-hpc.py <GDS file or accn> <annotation file 1> [more anno files...]")
+        print("Usage: python enrichment-hpc.py <GDS file or accn> <{MF, CC, BP}> <annotation file 1> [more anno files...]")
         print("\n See README.md for more information.")
         sys.exit(1)
     file_or_accn = sys.argv[1]
-    annotation_files = sys.argv[2:]
+    ontology = sys.argv[2]
+    annotation_files = sys.argv[3:]
     
     # check that database exists and has results table 
     try:
@@ -124,18 +149,23 @@ if __name__ == '__main__':
     dataset = dataset.to_numeric()
     dataset.filter().log2xform()
 
-    # acquire the platform used from the dataset metadata
-    platform = fetch(dataset.meta['platform'], destdir='data')
-
     # import the annotation files (in JSON format)
     annotation_years = [json.load(open(f)) for f in annotation_files]
 
-    for factor in dataset.factors:
+    # acquire the platform used from the dataset metadata
+    platform = fetch(dataset.meta['platform'], destdir='data')
+
+    print("Detected %d cores, splitting into %d subprocesses..." % (NCORES, NCORES-1))
+
+    # We're actually going to only look at "disease state" factors for this analysis.
+    for factor in ['disease state']: #dataset.factors:
         for subset in dataset.factors[factor]:
             for annotations in annotation_years:
                 year = annotations['meta']['year']
-                filtered_annotations = filter_size(annotations['anno'])
-                blocks = split(filtered_annotations, blocks=NCORES)
+                filtered_annotations = filter_annos(annotations['anno'])
+                filtered_annotations = restrict_subontology(filtered_annotations, ontology, year)
+                blocks = split(filtered_annotations, blocks=NCORES-1)
+                print("Split %d annotations into %d blocks of ~%d terms each..." % (len(filtered_annotations), len(blocks), len(blocks[0])))
                 print("-- [year: %s] [dataset: %s] [%s: %s] --" % (year, dataset.id, 
                                                                    factor, subset))
                 jobs = []

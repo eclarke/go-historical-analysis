@@ -154,6 +154,7 @@ def map2entrez(platform, probes=None):
             return [x[entrez_column] for x in platform.table if x[0] in probes]
     except ValueError:
         print "Error: could not find Entrez mappings for this platform."
+        print probes
         raise
 
 
