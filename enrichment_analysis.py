@@ -104,8 +104,8 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
 
     # convert Uniprot ids to Entrez Gene ids
     term_genes = map_uniprot(term['genes'], uniprot2entrez_map)
-
-    not_term_genes = [gene for gene in background if gene not in term_genes]
+    
+    
 
     # contingency table for fisher's exact test:
     # |  g_e - 1  | g_ne  |  (e = diff. expressed, ne = not diff. expressed,
@@ -116,6 +116,7 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
     if g_e < 1:
         return 1.0
     g_ne = len(intersect1d(term_genes, not_diffexp))
+    not_term_genes = [gene for gene in background if gene not in term_genes]
     ng_e = len(intersect1d(not_term_genes, diffexp))
     ng_ne = len(intersect1d(not_term_genes, not_diffexp))
     table = array([[g_e, g_ne], [ng_e, ng_ne]])

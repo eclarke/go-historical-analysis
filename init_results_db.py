@@ -5,25 +5,8 @@
 import sqlite3
 import os
 
-schema = """
-drop table if exists results;
-create table results (
-    _id     text    primary key,
-    goid    text,
-    term    text,
-    pval    number,
-    dataset text,
-    factor  text,
-    subset  text,
-    year    number
-);
-
-drop table if exists datasets;
-create table datasets (
-    published   number,
-    id          text    primary key
-);
-"""
+with open('results_db_schema.sql') as schema_file:
+    schema = schema_file.read()
 
 db_filename = 'results.db'
 db_exists = os.path.exists(db_filename)

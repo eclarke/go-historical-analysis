@@ -19,7 +19,8 @@ import subprocess
 # Job-specific options
 NODES = 1            # we don't have MPI capabilities so no point in increasing this
 PROC_PER_NODE = 8    # max cores for garibaldi machines
-WALLTIME = 3         # in hours
+WALLTIME = 5         # in hours
+
 JOBNAME = "{GDS}-ea.job"
 SCRIPT_FILE = "jobs/{jobname}.sh"
 COMMAND = "qsub {seriesopts} {scriptfile}"
@@ -32,7 +33,7 @@ SCRIPT_CONTENTS = """
 #PBS -j oe
 
 cd go
-python enrichment-hpc.py {gds} data/goa-*.json
+python enrichment.py {gds} BP data/goa-*.json
 """
 
 def spawn(gds, after=None, dryrun=False):
@@ -77,8 +78,3 @@ if __name__ == "__main__":
         job, command = spawn(accn, after=after, dryrun=dryrun)
         print "%s launched with command: '%s'" % (job, command)
         jobs.append(job)
-
-
-
-    
-        

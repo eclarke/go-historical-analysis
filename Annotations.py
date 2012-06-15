@@ -42,9 +42,9 @@ def parse_goa(goafile, filter_nonuniprot=True, filter_iea=False):
         print set([x[0] for x in goa])
     for line in goa:
         if (filter_nonuniprot and 'UniProt' in line[0]) or (filter_iea and line[6] != 'IEA'):
-            _append(gdict, line[1], {line[4]})
+            _append(gdict, line[1], set(line[4]))
             if verbose:
-                print 'added ', line[1], {line[4]}
+                print 'added ', line[1], set(line[4])
     return gdict
 
 
