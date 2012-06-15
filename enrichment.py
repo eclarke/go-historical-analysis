@@ -6,27 +6,41 @@ import sys
 import os
 import json
 import multiprocessing
-from multiprocessing import Process
-from __init__ import fetch
-import enrichment_analysis as ea
 import hashlib
 import time
 
+from multiprocessing import Process
+from collections import defaultdict
 
-ANNO_MAX_SIZE=2000
-ANNO_MIN_SIZE=10
+from statsmodels.stats import multitest
+
+from __init__ import fetch
+import enrichment_analysis as ea
+from Annotations import parse_flat
+
+ANNO_MAX_SIZE=1000
+ANNO_MIN_SIZE=3
 
 PVAL_CUTOFF = 0.05
 DIFF_AVG_CUTOFF = 1
-NCORES = 8
+NCORES = multiprocessing.cpu_count()
 
 db_filename = 'results.db'
 mapfile = 'data/uniprot2entrez.json'
+
+# SQLite commands (reference results_db_schema.sql)
 store_results_sql = """
-insert into results (_id, goid, term, pval, dataset, factor, subset, year)
- values (:id, :goid, :term, :pval, :dataset, :factor, :subset, :year)
+insert or replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_genes)
+ values (:id, :goid, :term, :pval, :dataset, :factor, :subset, :year, :numgenes)
 """
 
+select_results_sql = """
+select _id, pval from results where dataset=? and subset = ? and year=? order by pval
+"""
+
+insert_postinfo_sql = """
+update results set qval = :qval, num_annos= :numannos, anno_max= :annomax, anno_min = :annomin where _id = :id
+"""
 
 def split(annotation_dict, blocks=8):
     returnlist = [dict() for b in xrange(blocks)]
@@ -37,9 +51,11 @@ def split(annotation_dict, blocks=8):
     return returnlist
 
 
-def filter_size(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
+def filter_annos(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
     """Removes annotations that are composed of more than 'max' genes
-    or fewer than 'min'. This returns a filtered copy."""
+    or fewer than 'min'.
+    This returns a filtered copy."""
+    
     returndict = dict(annotation_dict)
     for k, v in annotation_dict.iteritems():
         if len(v['genes']) > _max or len(v['genes']) < _min:
@@ -48,13 +64,31 @@ def filter_size(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
     return returndict
 
 
+def restrict_subontology(annotation_dict, ontology, year):
+    go_id, name = {'MF': ('GO:0003674', 'Molecular Function'),
+                   'CC': ('GO:0005575', 'Cellular Component'),
+                   'BP': ('GO:0008150', 'Biological Process')}[ontology]
+    try:
+        ontology = parse_flat("data/go-%s.flat" % year)
+    except IOError:
+        print("Warning: Flattened ontology file not found for year: %s. Create flattened ontology using go_flattener.jar." % year)
+        print("No subontology restriction done; using all terms from all ontologies.")
+        return annotation_dict
+    returndict = dict(annotation_dict)
+    for term in annotation_dict:
+        if not go_id in ontology[term]:
+            del returndict[term]
+    print "Restricting to %s removed %d terms." % (name, (len(annotation_dict) - len(returndict)))
+    return returndict
+            
+
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
-        results = fn(dataset, platform, factor, subset, annotations, year, u2emap)
+        results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
         while True:
             try:
-                with sqlite3.connect(db_filename) as conn:
+                with sqlite3.connect(db_filename, timeout=30) as conn:
                     conn.executemany(store_results_sql, ({
                                 # the id field is there to prevent redundant entries
                                 'id': hashlib.md5('|'.join([t,dataset.id,factor,subset,year])).hexdigest(),
@@ -64,11 +98,12 @@ def store_in_db(fn):
                                 'dataset': dataset.id,
                                 'factor': factor,
                                 'subset': subset,
-                                'year': year} for t, pval in results.iteritems()))
+                                'year': year,
+                                'numgenes': len(diffexp)} for t, pval in results.iteritems()))
                     conn.commit()
                 break
-            except sqlite3.DatabaseError as e:
-                print("<%s> DatabaseError: %s. Sleeping for 2 seconds and retrying." % e.message)
+            except sqlite3.OperationalError as e:
+                print("<%s> OperationalError: %s. Sleeping for 2 seconds and retrying." % (p.name, e))
                 time.sleep(2)
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
@@ -96,16 +131,17 @@ def enriched(dataset, platform, factor, subset, annotations,
             print "<{name}>: ({i}/{total}) {pval}\t{term}".format(name=p.name,
                 i=i, pval=pval, term=term, total=total)
         results[term] = pval
-    return results
+    return results, diffexp
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print("Usage: python enrichment-hpc.py <GDS file or accn> <annotation file 1> [more anno files...]")
+        print("Usage: python enrichment-hpc.py <GDS file or accn> <{MF, CC, BP}> <annotation file 1> [more anno files...]")
         print("\n See README.md for more information.")
         sys.exit(1)
     file_or_accn = sys.argv[1]
-    annotation_files = sys.argv[2:]
+    ontology = sys.argv[2]
+    annotation_files = sys.argv[3:]
     
     # check that database exists and has results table 
     try:
@@ -124,27 +160,61 @@ if __name__ == '__main__':
     dataset = dataset.to_numeric()
     dataset.filter().log2xform()
 
+    # import the annotation files (in JSON format)
+    annotation_years = (json.load(open(f)) for f in annotation_files)
+
     # acquire the platform used from the dataset metadata
     platform = fetch(dataset.meta['platform'], destdir='data')
 
-    # import the annotation files (in JSON format)
-    annotation_years = [json.load(open(f)) for f in annotation_files]
+    print("Detected %d cores, splitting into %d subprocesses..." % (NCORES, NCORES-1))
 
-    for factor in dataset.factors:
+    for annotations in annotation_years:
+        year = annotations['meta']['year']
+        print "Filtering out annotation gene sets greater than %d and less than %d" % (ANNO_MAX_SIZE, ANNO_MIN_SIZE)
+        filtered_annotations = filter_annos(annotations['anno'])
+        filtered_annotations = restrict_subontology(filtered_annotations, ontology, year)
+        blocks = split(filtered_annotations, blocks=NCORES-1)
+        print("Split %d annotations into %d blocks of ~%d terms each..." % (len(filtered_annotations), len(blocks), len(blocks[0])))
+        # We're actually going to only look at "disease state" factors for this analysis.
+        factor = 'disease state'
         for subset in dataset.factors[factor]:
-            for annotations in annotation_years:
-                year = annotations['meta']['year']
-                filtered_annotations = filter_size(annotations['anno'])
-                blocks = split(filtered_annotations, blocks=NCORES)
-                print("-- [year: %s] [dataset: %s] [%s: %s] --" % (year, dataset.id, 
-                                                                   factor, subset))
-                jobs = []
-                for block in blocks:
-                    p = Process(target=enriched,
+            print("-- [year: %s] [dataset: %s] [%s: %s] --" % (year, dataset.id, 
+                                                               factor, subset))
+            jobs = []
+            for block in blocks:
+                p = Process(target=enriched,
                             args=(dataset, platform, factor, subset, 
-                                block, year, uniprot2entrez_map))
-                    jobs.append(p)
-                    p.start()
-                [p.join() for p in jobs] # wait for them all to finish
-    
+                                  block, year, uniprot2entrez_map))
+                jobs.append(p)
+                p.start()
+            [p.join() for p in jobs] # wait for them all to finish
 
+        # Calculate the q-values now that we have all the p-values, and also add the number of terms
+        for subset in dataset.factors[factor]:
+            try:
+                with sqlite3.connect(db_filename, timeout=30) as conn:
+                    cursor = conn.execute(select_results_sql, (dataset.id,subset,year))
+                    results = list(cursor.fetchall())    # list of tuples [(id, pval), ...]
+                    pvals = [x[1] for x in results] 
+                    ids = [x[0] for x in results]
+                    rejected, qvals = multitest.fdrcorrection(pvals)
+                    results = zip(ids,qvals)
+                    conn.executemany(insert_postinfo_sql, ({'qval': qval,
+                                                            'id': id,
+                                                            'numannos': len(filtered_annotations),
+                                                            'annomax': ANNO_MAX_SIZE,
+                                                            'annomin': ANNO_MIN_SIZE
+                                                            } for id, qval in results))
+                    conn.commit()
+                    print("Main: Inserted q-values, num. terms for annotation year %s" % year)
+            except sqlite3.OperationalError as e:
+                print("Main: OperationalError: %s. Sleeping for 2 seconds and retrying." % e)
+                time.sleep(2)
+
+                                     
+                    
+                    
+                                 
+                        
+
+                    

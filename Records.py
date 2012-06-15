@@ -37,6 +37,7 @@ import numpy
 from numpy import array
 # Some runtime warnings importing scipy on my machine; ignored. ymmv
 import scipy.stats as stats
+from statsmodels.stats import multitest
 import operator
 
 '''
@@ -385,14 +386,15 @@ class NumericDataset(SOFTRecord):
 
         t, pvals = stats.ttest_ind(A, B)
         # boolean arrays (T if significant, F otherwise) for the cutoffs
-        qvals = self.qvals(list(pvals))
+        rejected, qvals = multitest.fdrcorrection(pvals, alpha=fdr_limit)
         pvs = sorted(pvals)
         qvs = sorted(qvals)
         for i, x in enumerate(qvs):
             if i * x > 1:
                 print "qval: %f\t pval: %f\t index:%d" % (x, pvs[i], i)
                 break
-        diffexp = [x for i, x in enumerate(probes) if qvals[i] < fdr_limit]
+        # probe values are [probe_name, entrez_id] form (hence x[1])
+        diffexp = [x[0] for i, x in enumerate(probes) if qvals[i] < fdr_limit]
         if verbose:
             print("%d samples, %d differentially expressed genes in %s: %s" % (len([x for x in inA if x]), len(diffexp), _factor, _subset))
         return diffexp

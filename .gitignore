@@ -34,3 +34,6 @@ results.db
 # emacs backups, etc
 \#*#
 *~
+
+# job files
+*.job.[eo]*
