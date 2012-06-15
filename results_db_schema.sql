@@ -1,17 +1,18 @@
 drop table if exists results;
 create table results (
-       _id   	     text    primary key,
-       ontology	     text,
-       goid	     text,
+       _id   	     varchar(32),
+       ontology	     varchar(2),
+       goid	     varchar(10),
        term	     text,
-       pval	     number,
-       qval	     number,
-       dataset	     text,
+       pval	     double,
+       qval	     double,
+       dataset	     varchar(7),
        factor	     text,
        subset	     text,
-       year	     number,
-       num_annos     number,
-       num_genes     number,
-       anno_max	     number,
-       anno_min	     number
+       year	     year(4),
+       num_annos     int,
+       num_genes     int,
+       anno_max	     int,
+       anno_min	     int,
+       primary key (_id)
 );

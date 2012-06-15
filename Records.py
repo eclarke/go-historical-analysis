@@ -358,7 +358,7 @@ class NumericDataset(SOFTRecord):
     def filtered(self):
         return self._filtered
 
-    def diffexpressed(self, _subset, _factor, fdr_limit, verbose=True):
+    def diffexpressed(self, _subset, _factor, qval_limit, verbose=True):
         """Returns an array of probes that are differentially expressed according
         to the following method:
 
@@ -371,7 +371,7 @@ class NumericDataset(SOFTRecord):
         Arguments:
             _subset:    the subset to test for expressed genes
             _factor:    the factor the subset belongs to
-            fdr_limit:  the FDR q-value representing the upper limit for results
+            qval_limit: the FDR q-value representing the upper limit for results
         """
         if not self.filtered():
             print("Warning: Finding differentially expressed genes on an unfiltered matrix may fail. Run dataset.filter().")
