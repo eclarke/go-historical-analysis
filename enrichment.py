@@ -38,16 +38,16 @@ MYDB = config.get('MySQL', 'db')
 
 # MySQL commands (reference results_db_schema.sql)
 store_results_sql = """
-insert or replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_genes)
- values (:id, :goid, :term, :pval, :dataset, :factor, :subset, :year, :numgenes)
+replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_genes)
+ values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 select_results_sql = """
-select _id, pval from results where dataset=? and subset = ? and year=? order by pval
+select _id, pval from results where dataset=%s and subset=%s and year=%s order by pval
 """
 
 insert_postinfo_sql = """
-update results set qval = :qval, num_annos= :numannos, anno_max= :annomax, anno_min = :annomin where _id = :id
+update results set qval=%s, ontology=%s, num_annos=%s, anno_max=%s, anno_min=%s where _id=%s
 """
 
 mapfile = 'data/uniprot2entrez.json'
@@ -90,25 +90,22 @@ def restrict_subontology(annotation_dict, ontology, year):
             del returndict[term]
     print "Restricting to %s removed %d terms." % (name, (len(annotation_dict) - len(returndict)))
     return returndict
-            
+
+    
 
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
-        with mysql.connect(MYHOST, MYUSER, MYPASS, MYDB) as conn:
-            conn.executemany(store_results_sql, ({
-                        # the id field is there to prevent redundant entries
-                        'id': hashlib.md5('|'.join([t,dataset.id,factor,subset,year])).hexdigest(),
-                        'goid': t,
-                        'term': annotations[t]['name'],
-                        'pval': pval,
-                        'dataset': dataset.id,
-                        'factor': factor,
-                        'subset': subset,
-                        'year': year,
-                        'numgenes': len(diffexp)} for t, pval in results.iteritems()))
-            conn.commit()
+        db = mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
+        c = db.cursor()
+        c.executemany(store_results_sql, ((hashlib.md5('|'.join([goid,dataset.id,factor,subset,year])).hexdigest(),
+                                           goid, annotations[goid]['name'],
+                                           pval, dataset.id, factor, subset, year,
+                                           len(diffexp)) for goid, pval in results.iteritems()))
+        c.close()
+        db.commit()
+        db.close()
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
 
@@ -131,7 +128,7 @@ def enriched(dataset, platform, factor, subset, annotations,
     for i, term in enumerate(annotations):
         pval = ea._fexact(diffexp, not_diffexp, background, annotations[term],
                              uniprot2entrez_map)
-        if pval < PVAL_CUTOFF:
+        if pval < QVAL_CUTOFF:
             print "<{name}>: ({i}/{total}) {pval}\t{term}".format(name=p.name,
                 i=i, pval=pval, term=term, total=total)
         results[term] = pval
@@ -186,22 +183,22 @@ if __name__ == '__main__':
             [p.join() for p in jobs] # wait for them all to finish
 
         # Calculate the q-values now that we have all the p-values, and also add the number of terms
+        db = mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
         for subset in dataset.factors[factor]:
-            with mysql.connect(MYHOST, MYUSER, MYPASS, MYDB) as conn:
-                cursor = conn.execute(select_results_sql, (dataset.id,subset,year))
-                results = list(cursor.fetchall())    # list of tuples [(id, pval), ...]
-                pvals = [x[1] for x in results] 
-                ids = [x[0] for x in results]
-                rejected, qvals = multitest.fdrcorrection(pvals)
-                results = zip(ids,qvals)
-                conn.executemany(insert_postinfo_sql, ({'qval': qval,
-                                                        'id': id,
-                                                        'numannos': len(filtered_annotations),
-                                                        'annomax': ANNO_MAX_SIZE,
-                                                        'annomin': ANNO_MIN_SIZE
-                                                        } for id, qval in results))
-                conn.commit()
-                print("Main: Inserted q-values, num. terms for annotation year %s" % year)
+            c = db.cursor()
+            c.execute(select_results_sql, (dataset.id,subset,int(year)))
+            results = list(c.fetchall())    # list of tuples [(id, pval), ...]
+            pvals = [x[1] for x in results] 
+            ids = [x[0] for x in results]
+            rejected, qvals = multitest.fdrcorrection(pvals)
+            results = zip(ids,qvals)
+            c.executemany(insert_postinfo_sql, ((qval, ontology, len(filtered_annotations),
+                                                 ANNO_MAX_SIZE, ANNO_MIN_SIZE, id)
+                                                for id, qval in results))
+            c.close()
+            db.commit()
+        db.close
+        print("Main: Inserted q-values, num. terms for annotation year %s" % year)
 
                                      
                     

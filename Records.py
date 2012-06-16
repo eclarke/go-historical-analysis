@@ -1,29 +1,5 @@
 # Copyright 2012 by Erik Clarke. All rights reserved.
-# This code is part of the Biopython distribution and governed by its
-# license.  Please see the LICENSE file that should have been included
-# as part of this package.
 
-# FDR Calculations (function 'qvals'):
-# Copyright (C) 2008 Simone Leo - CRS4. All Rights Reserved.
-# 
-# Permission to use, copy, modify, and distribute this software and its
-# documentation for educational, research, and not-for-profit purposes, without
-# fee and without a signed licensing agreement, is hereby granted, provided
-# that the above copyright notice, this paragraph and the following two
-# paragraphs appear in all copies, modifications, and distributions. Contact
-# CRS4, Parco Scientifico e Tecnologico, Edificio 1, 09010 PULA (CA - Italy),
-# +3907092501 for commercial licensing opportunities.
-# 
-# IN NO EVENT SHALL CRS4 BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT, SPECIAL,
-# INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOST PROFITS, ARISING OUT OF
-# THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF CRS4 HAS BEEN ADVISED
-# OF THE POSSIBILITY OF SUCH DAMAGE.
-# 
-# CRS4 SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE. THE SOFTWARE AND ACCOMPANYING DOCUMENTATION, IF ANY, PROVIDED
-# HEREUNDER IS PROVIDED "AS IS". CRS4 HAS NO OBLIGATION TO PROVIDE MAINTENANCE,
-# SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 """Classes to represent records for NCBI's Gene Expression Omnibus (GEO).
 
 http://www.ncbi.nlm.nih.gov/geo/
@@ -35,16 +11,8 @@ from collections import defaultdict
 from copy import deepcopy
 import numpy
 from numpy import array
-# Some runtime warnings importing scipy on my machine; ignored. ymmv
 import scipy.stats as stats
 from statsmodels.stats import multitest
-import operator
-
-'''
-import warnings
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=RuntimeWarning)
-'''
 
 
 def _truncate(string, trunc=20):
@@ -385,43 +353,17 @@ class NumericDataset(SOFTRecord):
         B = numpy.transpose(matrix[:, numpy.invert(inA)])
 
         t, pvals = stats.ttest_ind(A, B)
-        # boolean arrays (T if significant, F otherwise) for the cutoffs
-        rejected, qvals = multitest.fdrcorrection(pvals, alpha=fdr_limit)
+        rejected, qvals = multitest.fdrcorrection(pvals, alpha=qval_limit)
+        """ Old testing stuff...
         pvs = sorted(pvals)
         qvs = sorted(qvals)
         for i, x in enumerate(qvs):
             if i * x > 1:
                 print "qval: %f\t pval: %f\t index:%d" % (x, pvs[i], i)
                 break
+        """
         # probe values are [probe_name, entrez_id] form (hence x[1])
-        diffexp = [x[0] for i, x in enumerate(probes) if qvals[i] < fdr_limit]
+        diffexp = [x[0] for i, x in enumerate(probes) if qvals[i] < qval_limit]
         if verbose:
             print("%d samples, %d differentially expressed genes in %s: %s" % (len([x for x in inA if x]), len(diffexp), _factor, _subset))
         return diffexp
-
-    def qvals(self, pv):
-        """Returns a Benjamini-Hochberg FDR q-values corresponding to p-values.
-
-        This function was lifted verbatim from pygsa/fdr.py (http://acc.crs4.it/acdc/pygsa/) and
-        falls under the copyright notice included above.
-
-        Author: Simone Leo - CRS4
-
-        Arguments:
-            pvals:  a list of p-values from a multiple statistical test
-        """
-        if not pv:
-            return []
-        m = len(pv)
-        args, pv = zip(*sorted(enumerate(pv), None, operator.itemgetter(1)))
-        if pv[0] < 0 or pv[-1] > 1:
-            raise ValueError("p-values must be between 0 and 1")
-        qvalues = m * [0]
-        mincoeff = pv[-1]
-        qvalues[args[-1]] = mincoeff
-        for j in xrange(m - 2, -1, -1):
-            coeff = m * pv[j] / float(j + 1)
-            if coeff < mincoeff:
-                mincoeff = coeff
-            qvalues[args[j]] = mincoeff
-        return qvalues
