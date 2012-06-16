@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import sqlite3
 import sys
 import os
 import json
@@ -10,33 +11,24 @@ import time
 
 from multiprocessing import Process
 from collections import defaultdict
-from ConfigParser import ConfigParser
 
 from statsmodels.stats import multitest
-import MySQLdb as mysql
 
 from __init__ import fetch
 import enrichment_analysis as ea
 from Annotations import parse_flat
 
+ANNO_MAX_SIZE=1000
+ANNO_MIN_SIZE=3
 
-config = ConfigParser()
-config.read('settings.cfg')
-
-ANNO_MAX_SIZE = config.getint('Annotations', 'max size')
-ANNO_MIN_SIZE = config.getint('Annotations', 'min size')
-
-QVAL_CUTOFF = config.getfloat('FDR', 'cutoff')
+PVAL_CUTOFF = 0.05
+DIFF_AVG_CUTOFF = 1
 NCORES = multiprocessing.cpu_count()
 
+db_filename = 'results.db'
+mapfile = 'data/uniprot2entrez.json'
 
-# MySQL settings
-MYUSER = config.get('MySQL', 'user')
-MYHOST = config.get('MySQL', 'host')
-MYPASS = config.get('MySQL', 'pass')
-MYDB = config.get('MySQL', 'db')
-
-# MySQL commands (reference results_db_schema.sql)
+# SQLite commands (reference results_db_schema.sql)
 store_results_sql = """
 insert or replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_genes)
  values (:id, :goid, :term, :pval, :dataset, :factor, :subset, :year, :numgenes)
@@ -49,8 +41,6 @@ select _id, pval from results where dataset=? and subset = ? and year=? order by
 insert_postinfo_sql = """
 update results set qval = :qval, num_annos= :numannos, anno_max= :annomax, anno_min = :annomin where _id = :id
 """
-
-mapfile = 'data/uniprot2entrez.json'
 
 def split(annotation_dict, blocks=8):
     returnlist = [dict() for b in xrange(blocks)]
@@ -96,19 +86,25 @@ def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
-        with mysql.connect(MYHOST, MYUSER, MYPASS, MYDB) as conn:
-            conn.executemany(store_results_sql, ({
-                        # the id field is there to prevent redundant entries
-                        'id': hashlib.md5('|'.join([t,dataset.id,factor,subset,year])).hexdigest(),
-                        'goid': t,
-                        'term': annotations[t]['name'],
-                        'pval': pval,
-                        'dataset': dataset.id,
-                        'factor': factor,
-                        'subset': subset,
-                        'year': year,
-                        'numgenes': len(diffexp)} for t, pval in results.iteritems()))
-            conn.commit()
+        while True:
+            try:
+                with sqlite3.connect(db_filename, timeout=30) as conn:
+                    conn.executemany(store_results_sql, ({
+                                # the id field is there to prevent redundant entries
+                                'id': hashlib.md5('|'.join([t,dataset.id,factor,subset,year])).hexdigest(),
+                                'goid': t,
+                                'term': annotations[t]['name'],
+                                'pval': pval,
+                                'dataset': dataset.id,
+                                'factor': factor,
+                                'subset': subset,
+                                'year': year,
+                                'numgenes': len(diffexp)} for t, pval in results.iteritems()))
+                    conn.commit()
+                break
+            except sqlite3.OperationalError as e:
+                print("<%s> OperationalError: %s. Sleeping for 2 seconds and retrying." % (p.name, e))
+                time.sleep(2)
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
 
@@ -117,7 +113,7 @@ def store_in_db(fn):
 def enriched(dataset, platform, factor, subset, annotations, 
                 year, uniprot2entrez_map):
     diffexp = dataset.diffexpressed(subset, factor,
-        QVAL_CUTOFF)
+        PVAL_CUTOFF, DIFF_AVG_CUTOFF)
     diffexp = ea.map2entrez(platform, probes=diffexp)
     background = ea.map2entrez(platform)
     not_diffexp = [x for x in background if x not in diffexp]
@@ -147,6 +143,14 @@ if __name__ == '__main__':
     ontology = sys.argv[2]
     annotation_files = sys.argv[3:]
     
+    # check that database exists and has results table 
+    try:
+        assert os.path.isfile(db_filename)
+        with sqlite3.connect(db_filename) as conn:
+            conn.execute('select * from results limit 1')
+    except (AssertionError, sqlite3.OperationalError):
+        print "Fatal: SQLite database '%s' not configured correctly. Run `python init_results_db.py force` to create database with correct schema." % db_filename
+
     # this file can be downloaded from Uniprot's mapping service
     uniprot2entrez_map = json.load(open(mapfile))
     assert len(uniprot2entrez_map) > 27000
@@ -187,21 +191,25 @@ if __name__ == '__main__':
 
         # Calculate the q-values now that we have all the p-values, and also add the number of terms
         for subset in dataset.factors[factor]:
-            with mysql.connect(MYHOST, MYUSER, MYPASS, MYDB) as conn:
-                cursor = conn.execute(select_results_sql, (dataset.id,subset,year))
-                results = list(cursor.fetchall())    # list of tuples [(id, pval), ...]
-                pvals = [x[1] for x in results] 
-                ids = [x[0] for x in results]
-                rejected, qvals = multitest.fdrcorrection(pvals)
-                results = zip(ids,qvals)
-                conn.executemany(insert_postinfo_sql, ({'qval': qval,
-                                                        'id': id,
-                                                        'numannos': len(filtered_annotations),
-                                                        'annomax': ANNO_MAX_SIZE,
-                                                        'annomin': ANNO_MIN_SIZE
-                                                        } for id, qval in results))
-                conn.commit()
-                print("Main: Inserted q-values, num. terms for annotation year %s" % year)
+            try:
+                with sqlite3.connect(db_filename, timeout=30) as conn:
+                    cursor = conn.execute(select_results_sql, (dataset.id,subset,year))
+                    results = list(cursor.fetchall())    # list of tuples [(id, pval), ...]
+                    pvals = [x[1] for x in results] 
+                    ids = [x[0] for x in results]
+                    rejected, qvals = multitest.fdrcorrection(pvals)
+                    results = zip(ids,qvals)
+                    conn.executemany(insert_postinfo_sql, ({'qval': qval,
+                                                            'id': id,
+                                                            'numannos': len(filtered_annotations),
+                                                            'annomax': ANNO_MAX_SIZE,
+                                                            'annomin': ANNO_MIN_SIZE
+                                                            } for id, qval in results))
+                    conn.commit()
+                    print("Main: Inserted q-values, num. terms for annotation year %s" % year)
+            except sqlite3.OperationalError as e:
+                print("Main: OperationalError: %s. Sleeping for 2 seconds and retrying." % e)
+                time.sleep(2)
 
                                      
                     
