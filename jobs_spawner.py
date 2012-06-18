@@ -67,7 +67,7 @@ if __name__ == "__main__":
     with open(sys.argv[1]) as infile:
         accns = [x.strip('\n') for x in infile.readlines()]
 
-    max_concurrent = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    max_concurrent = int(sys.argv[2]) if len(sys.argv) > 2 else len(accns) 
 
     dryrun = 'dryrun' in sys.argv
 
