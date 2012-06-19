@@ -277,12 +277,21 @@ class NumericDataset(SOFTRecord):
         self._filtered = False
         # heuristic for determining if already log2 transformed:
         print "checking if matrix has been normalized..."
+        if dataset.meta['value_type'] == 'count':
+            print "matrix not normalized, taking the log2 of each value..."
+            self.log2xform()
+        else:
+            print "matrix data has been modified, doing no further normalization..." 
+            
+
+        """ Old algorithm for checking if normalized
         sm = numpy.sort(self.matrix, axis=None)
         l = len(sm) / 100
         a = sm[::-1][l]
         if a > 100:  # reverse and then choose 1st percentile value (top hundredth)
             print "value of 1st percentile matrix value above 100 (%f); log2 transforming" % a
             self.log2xform()
+        """
 
     def log2xform(self):
         """Returns this dataset with the binary log applied to each value in

@@ -1,4 +1,5 @@
-drop table if exists results;
+
+-- drop table if exists results;
 create table results (
        _id   	     varchar(32),
        ontology	     varchar(2),
@@ -14,5 +15,9 @@ create table results (
        num_genes     int,
        anno_max	     int,
        anno_min	     int,
-       primary key (_id)
+       primary key (_id),
+       index (dataset)
 );
+
+-- after everything has finished processing, 
+-- recommend creating indexes around pval, qval, etc

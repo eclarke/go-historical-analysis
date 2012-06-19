@@ -11,14 +11,13 @@ import time
 from multiprocessing import Process
 from collections import defaultdict
 from ConfigParser import ConfigParser
-
+from contextlib import closing
 from statsmodels.stats import multitest
 import MySQLdb as mysql
 
 from __init__ import fetch
 import enrichment_analysis as ea
 from Annotations import parse_flat
-
 
 config = ConfigParser()
 config.read('settings.cfg')
@@ -43,7 +42,7 @@ replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_
 """
 
 select_results_sql = """
-select _id, pval from results where dataset=%s and subset=%s and year=%s order by pval
+select _id, pval from results where dataset=%s and subset=%s and year=%s
 """
 
 insert_postinfo_sql = """
@@ -52,13 +51,21 @@ update results set qval=%s, ontology=%s, num_annos=%s, anno_max=%s, anno_min=%s 
 
 mapfile = 'data/uniprot2entrez.json'
 
-def split(annotation_dict, blocks=8):
-    returnlist = [dict() for b in xrange(blocks)]
-    b = 0
-    for k, v in annotation_dict.iteritems():
-        returnlist[b][k] = v
-        b = b + 1 if b < blocks - 1 else 0
-    return returnlist
+def split(iterable, blocks=8):
+    if isinstance(iterable, dict):
+        returnlist = [dict() for b in xrange(blocks)]
+        b = 0
+        for k, v in iterable.iteritems():
+            returnlist[b][k] = v
+            b = b + 1 if b < blocks - 1 else 0
+        return returnlist
+    else:
+        returnlist = [list() for b in xrange(blocks)]
+        b = 0
+        for i in iterable:
+            returnlist[b].append(i)
+            b = b + 1 if b < blocks - 1 else 0
+        return returnlist
 
 
 def filter_annos(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
@@ -91,20 +98,30 @@ def restrict_subontology(annotation_dict, ontology, year):
     print "Restricting to %s removed %d terms." % (name, (len(annotation_dict) - len(returndict)))
     return returndict
 
-    
+def get_connection(max_retries=30):
+    i = 0
+    while True and i <= max:
+        try:
+            return mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
+        except mysql.OperationalError:
+            print("Operational error, sleeping for 5 seconds...")
+            time.sleep(5)
+            i += 1
+    print("Max retries reached, aborting...")
+    raise mysql.OperationalError("Failed to connect after %d retries" % max_retries)
+
 
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
-        db = mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
-        c = db.cursor()
-        c.executemany(store_results_sql, ((hashlib.md5('|'.join([goid,dataset.id,factor,subset,year])).hexdigest(),
-                                           goid, annotations[goid]['name'],
-                                           pval, dataset.id, factor, subset, year,
-                                           len(diffexp)) for goid, pval in results.iteritems()))
-        c.close()
-        db.commit()
+        db = get_connection(100)
+        with closing(db.cursor()) as c:
+            c.executemany(store_results_sql, ((hashlib.md5('|'.join([goid,dataset.id,factor,subset,year])).hexdigest(),
+                                               goid, annotations[goid]['name'],
+                                               pval, dataset.id, factor, subset, year,
+                                               len(diffexp)) for goid, pval in results.iteritems()))
+            db.commit()
         db.close()
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
     return store
@@ -159,14 +176,14 @@ if __name__ == '__main__':
     # acquire the platform used from the dataset metadata
     platform = fetch(dataset.meta['platform'], destdir='data')
 
-    print("Detected %d cores, splitting into %d subprocesses..." % (NCORES, NCORES-1))
+    print("Detected %d cores, splitting into %d subprocesses..." % (NCORES, NCORES))
 
     for annotations in annotation_years:
         year = annotations['meta']['year']
         print "Filtering out annotation gene sets greater than %d and less than %d" % (ANNO_MAX_SIZE, ANNO_MIN_SIZE)
         filtered_annotations = filter_annos(annotations['anno'])
         filtered_annotations = restrict_subontology(filtered_annotations, ontology, year)
-        blocks = split(filtered_annotations, blocks=NCORES-1)
+        blocks = split(filtered_annotations, blocks=NCORES)
         print("Split %d annotations into %d blocks of ~%d terms each..." % (len(filtered_annotations), len(blocks), len(blocks[0])))
         # We're actually going to only look at "disease state" factors for this analysis.
         factor = 'disease state'
@@ -183,22 +200,27 @@ if __name__ == '__main__':
             [p.join() for p in jobs] # wait for them all to finish
 
         # Calculate the q-values now that we have all the p-values, and also add the number of terms
-        db = mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
+
         for subset in dataset.factors[factor]:
-            c = db.cursor()
-            c.execute(select_results_sql, (dataset.id,subset,int(year)))
-            results = list(c.fetchall())    # list of tuples [(id, pval), ...]
+            db = get_connection(100)
+            with closing(db.cursor()) as c:
+                c.execute(select_results_sql, (dataset.id, subset, int(year)))
+                results = list(c.fetchall())    # list of tuples [(id, pval), ...]
+                
             pvals = [x[1] for x in results] 
             ids = [x[0] for x in results]
             rejected, qvals = multitest.fdrcorrection(pvals)
             results = zip(ids,qvals)
-            c.executemany(insert_postinfo_sql, ((qval, ontology, len(filtered_annotations),
-                                                 ANNO_MAX_SIZE, ANNO_MIN_SIZE, id)
-                                                for id, qval in results))
-            c.close()
-            db.commit()
-        db.close
-        print("Main: Inserted q-values, num. terms for annotation year %s" % year)
+            postinfo = [(qval, ontology, len(filtered_annotations), ANNO_MAX_SIZE, ANNO_MIN_SIZE, id)
+                        for id, qval in results]
+            print("Main: Inserting (or waiting to insert) additional information into results for subset...")
+            for postinfo_chunk in split(postinfo, 4):
+                with closing(db.cursor()) as c:
+                    c.executemany(insert_postinfo_sql, postinfo)
+                    db.commit()
+            db.close()
+
+        print("Main: Updated results for annotation year %s" % year)
 
                                      
                     
