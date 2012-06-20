@@ -147,16 +147,17 @@ def map2entrez(platform, probes=None):
     """Returns the Entrez Gene ID for the probes. Some probes may not map (i.e,
         controls, etc)- these are simply empty strings in the returned array.
     """
-    try:
+    if 'ENTREZ_GENE_ID' in platform.table[0]:
         entrez_column = platform.table[0].index('ENTREZ_GENE_ID')
-        if probes == None:
-            return [x[entrez_column] for x in platform.table]
-        else:
-            return [x[entrez_column] for x in platform.table if x[0] in probes]
-    except ValueError:
-        print "Error: could not find Entrez mappings for this platform."
-        print probes
-        raise
+    elif 'GENE' in platform.table[0]:
+        entrez_column = platform.table[0].index('GENE')
+    else:
+        raise ValueError('Cannot find Entrez mappings for this platform!')
+    if probes == None:
+        return [x[entrez_column] for x in platform.table]
+    else:
+        return [x[entrez_column] for x in platform.table if x[0] in probes]
+
 
 
 def test(file_or_accn, annotation_file):

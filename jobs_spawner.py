@@ -21,7 +21,7 @@ NODES = 1            # we don't have MPI capabilities so no point in increasing 
 PROC_PER_NODE = 8    # max cores for garibaldi machines
 WALLTIME = 15        # in hours
 
-JOBNAME = "{GDS}-ea.job"
+JOBNAME = "{GDS}-{pyscript}-ea.job"
 SCRIPT_FILE = "jobs/{jobname}.sh"
 COMMAND = "qsub {seriesopts} {scriptfile}"
 
@@ -33,21 +33,22 @@ SCRIPT_CONTENTS = """
 #PBS -j oe
 
 cd go
-python enrichment.py {gds} BP data/goa-*.json
-python enrichment.py {gds} MF data/goa-*.json
-python enrichment.py {gds} CC data/goa-*.json
+python {pyscriptname} {gds} BP data/goa-*.json
+python {pyscriptname} {gds} MF data/goa-*.json
+python {pyscriptname} {gds} CC data/goa-*.json
 """
 
-def spawn(gds, after, dryrun):
+def spawn(gds, scriptname, after, dryrun):
+    jobname = JOBNAME.format(GDS=gds, pyscript=scriptname)
     args = {'nodes': NODES,
             'proc_per_node': PROC_PER_NODE,
             'hours': WALLTIME,
-            'name': JOBNAME.format(GDS=gds),
-            'script': SCRIPT_FILE.format(jobname=gds),
-            'gds':gds}
+            'name': jobname,
+            'script': SCRIPT_FILE.format(jobname=jobname),
+            'gds':gds,
+            'pyscriptname':scriptname}
 
     script_file = create_job_script(args)
-    print after
     series_options = '-W depend=afterany:'+after if after else ''
     command = COMMAND.format(seriesopts=series_options,
                              scriptfile=script_file)
@@ -64,14 +65,17 @@ def create_job_script(args):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python jobs_spawner.py <file listing GDS accns, one per line> [max concurrent jobs] [dryrun]")
+        print("Usage: python jobs_spawner.py <file listing GDS accns, one per line> [fdr] [dryrun] -m [max concurrent jobs]")
         sys.exit(1)
 
     with open(sys.argv[1]) as infile:
         accns = [x.strip('\n') for x in infile.readlines()]
 
     print "numargs: ", len(sys.argv)
-    max_concurrent = int(sys.argv[2]) if len(sys.argv) > 2 else len(accns) 
+    if '-m' in sys.argv:
+        max_concurrent = int(sys.argv[sys.argv.index('-m')+1])
+    else:
+        max_concurrent = len(accns)
 
     dryrun = 'dryrun' in sys.argv
 
@@ -80,9 +84,9 @@ if __name__ == "__main__":
     print "launching %d jobs in groups of %d" % (len(accns), max_concurrent)
     for i, accn in enumerate(accns):
         after = jobs[i-1] if i > 0 and (i % max_concurrent) == 0 else after
-        print after
         if i > max_concurrent:
             assert after
-        job, command = spawn(accn, after=after, dryrun=dryrun)
+        pyscriptname = 'enrichment.py' if ('fdr' not in sys.argv) else 'fdr_correction.py'
+        job, command = spawn(accn, pyscriptname, after=after, dryrun=dryrun)
         print "%s launched with command: '%s'" % (job, command)
         jobs.append(job)

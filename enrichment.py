@@ -36,20 +36,23 @@ MYPASS = config.get('MySQL', 'pass')
 MYDB = config.get('MySQL', 'db')
 
 # MySQL commands (reference results_db_schema.sql)
+set_isolation_level = """set session transaction isolation level read committed"""
+
 store_results_sql = """
-replace into results (_id, goid, term, pval, dataset, factor, subset, year, num_genes)
- values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+replace into results (_id, _subid, ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max)
+ values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
-select_results_sql = """
-select _id, pval from results where dataset=%s and subset=%s and year=%s
+select_pvals_sql = """
+select _subid, pval from results where _id=%s
 """
 
-insert_postinfo_sql = """
-update results set qval=%s, ontology=%s, num_annos=%s, anno_max=%s, anno_min=%s where _id=%s
+insert_qval_sql = """
+update results set qval=%s where _subid=%s
 """
 
 mapfile = 'data/uniprot2entrez.json'
+
 
 def split(iterable, blocks=8):
     if isinstance(iterable, dict):
@@ -98,11 +101,16 @@ def restrict_subontology(annotation_dict, ontology, year):
     print "Restricting to %s removed %d terms." % (name, (len(annotation_dict) - len(returndict)))
     return returndict
 
+
 def get_connection(max_retries=30):
     i = 0
     while True and i <= max:
         try:
-            return mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
+            db = mysql.connect(MYHOST, MYUSER, MYPASS, MYDB)
+            with closing(db.cursor()) as c:
+                c.execute(set_isolation_level)
+                db.commit()
+            return db
         except mysql.OperationalError:
             print("Operational error, sleeping for 5 seconds...")
             time.sleep(5)
@@ -111,16 +119,23 @@ def get_connection(max_retries=30):
     raise mysql.OperationalError("Failed to connect after %d retries" % max_retries)
 
 
+def md5hash(*args):
+    return hashlib.md5(''.join(args)).hexdigest()
+
+
 def store_in_db(fn):
-    def store(dataset, platform, factor, subset, annotations, year, u2emap):
+    def store(dataset, platform, factor, subset, annotations, year, num_annos, ontology, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
         db = get_connection(100)
         with closing(db.cursor()) as c:
-            c.executemany(store_results_sql, ((hashlib.md5('|'.join([goid,dataset.id,factor,subset,year])).hexdigest(),
-                                               goid, annotations[goid]['name'],
-                                               pval, dataset.id, factor, subset, year,
-                                               len(diffexp)) for goid, pval in results.iteritems()))
+            col_results = []
+            for goid, pval in results.iteritems():
+                _id = md5hash(dataset.id, factor, subset, year, ontology)
+                _subid = md5hash(goid, _id)
+                col_results.append((_id, _subid, ontology, goid, annotations[goid]['name'], pval, dataset.id,
+                                    factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE))
+            c.executemany(store_results_sql, col_results)
             db.commit()
         db.close()
         print("<%s> DONE: Stored %d terms in db" % (p.name, len(results)))
@@ -140,23 +155,61 @@ def enriched(dataset, platform, factor, subset, annotations,
     if len(diffexp) == 0:
         print("Warning: no differentially expressed genes found for " +
             "%s:%s" % (factor, subset))
-
+        
     results = {}
     for i, term in enumerate(annotations):
-        pval = ea._fexact(diffexp, not_diffexp, background, annotations[term],
-                             uniprot2entrez_map)
+        if len(diffexp) == 0:
+            pval = 1
+        else:
+            pval = ea._fexact(diffexp, not_diffexp, background, annotations[term],
+                              uniprot2entrez_map)
         if pval < QVAL_CUTOFF:
             print "<{name}>: ({i}/{total}) {pval}\t{term}".format(name=p.name,
-                i=i, pval=pval, term=term, total=total)
+                                                                  i=i, pval=pval, 
+                                                                  term=term, 
+                                                                  total=total)
         results[term] = pval
     return results, diffexp
 
 
+def multitest_correction(dataset, ontology, annotation_files):
+    annotation_years = (json.load(open(f)) for f in annotation_files)
+    factor = 'disease state'
+    db = get_connection(100)
+    for annotations in annotation_years:
+        year = annotations['meta']['year']
+        for subset in dataset.factors[factor]:
+            print "[%s]-[%s]-[%s]-[%s]:" % (dataset.id, year, ontology, subset),
+            with closing(db.cursor()) as c:
+                _id = md5hash(dataset.id, factor, subset, year, ontology)
+                print "selecting pvals... ",
+                c.execute(select_pvals_sql, _id)
+                results = list(c.fetchall())    # list of tuples [(_subid, pval), ...]
+            pvals = [x[1] for x in results] 
+            subids = [x[0] for x in results]
+            print "calculating FDR... ",
+            rejected, qvals = multitest.fdrcorrection(pvals)
+            results = zip(qvals, subids)
+            with closing(db.cursor()) as c:
+                print "inserting %d qvals... " % len(results),
+                c.executemany(insert_qval_sql, results)
+                db.commit()
+            print "done."
+    db.close()
+
+
+def _usage():
+    print("Inserts into mysql database specified in settings.cfg results from the enrichment analysis of the given dataset "
+          "against the specified annotation files, using one of the sub-ontologies specified.\n")
+    print("Usage: python fdr_correction.py <GDS file or accn> <[MF, CC, BP]> <anno file 1> [more anno files...]")
+    print("\n See README.md for more information.")
+    sys.exit(1)
+
+
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print("Usage: python enrichment-hpc.py <GDS file or accn> <{MF, CC, BP}> <annotation file 1> [more anno files...]")
-        print("\n See README.md for more information.")
-        sys.exit(1)
+    if len(sys.argv) < 3 or len(sys.argv[2]) != 2:
+        _usage()
+
     file_or_accn = sys.argv[1]
     ontology = sys.argv[2]
     annotation_files = sys.argv[3:]
@@ -194,13 +247,15 @@ if __name__ == '__main__':
             for block in blocks:
                 p = Process(target=enriched,
                             args=(dataset, platform, factor, subset, 
-                                  block, year, uniprot2entrez_map))
+                                  block, year, len(filtered_annotations), ontology, uniprot2entrez_map))
                 jobs.append(p)
                 p.start()
             [p.join() for p in jobs] # wait for them all to finish
 
-        # Calculate the q-values now that we have all the p-values, and also add the number of terms
 
+
+        # Calculate the q-values now that we have all the p-values, and also add the number of terms
+        """ This should be in a separate process that runs *after* we have all the pvals 
         for subset in dataset.factors[factor]:
             db = get_connection(100)
             with closing(db.cursor()) as c:
@@ -221,7 +276,7 @@ if __name__ == '__main__':
             db.close()
 
         print("Main: Updated results for annotation year %s" % year)
-
+        """
                                      
                     
                     
