@@ -105,7 +105,6 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
     # convert Uniprot ids to Entrez Gene ids
     term_genes = map_uniprot(term['genes'], uniprot2entrez_map)
     
-    
 
     # contingency table for fisher's exact test:
     # |  g_e - 1  | g_ne  |  (e = diff. expressed, ne = not diff. expressed,

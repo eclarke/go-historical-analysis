@@ -31,6 +31,7 @@ pip-log.txt
 *.gz
 results.db
 settings.cfg
+settings.alt.cfg
 
 # emacs backups, etc
 \#*#
