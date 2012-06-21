@@ -30,6 +30,7 @@ pip-log.txt
 *.soft
 *.gz
 results.db
+settings.cfg
 
 # emacs backups, etc
 \#*#
