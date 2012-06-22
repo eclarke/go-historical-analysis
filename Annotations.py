@@ -88,7 +88,7 @@ def replace_obs(goa, obs):
     return goa_cp
 
 
-def import_replace_flip_expand(goafile, obsfile, flatfile):
+def import_replace_flip_expand(goafile, obsfile, flatfile, keep_iea):
     """This does all the necessary transformations to a gene annotation
     file given a list of obsolete UniProt terms and a flattened file
     that describes all isa and has_part relationships."""
@@ -97,7 +97,7 @@ def import_replace_flip_expand(goafile, obsfile, flatfile):
     goa = expand_goa(
             flip_goa(
                 replace_obs(
-                    parse_goa(goafile),
+                    parse_goa(goafile, filter_iea=!keep_iea),
                 obs)),
           gof)
     return goa
@@ -148,7 +148,7 @@ def goa2gmt(fgoa, obo=None):
     return lines
 
 
-def import_annotations(goafile, obsfile, flatfile, obofile, year=None):
+def import_annotations(goafile, obsfile, flatfile, obofile, year=None, keep_iea=True):
     goa = import_replace_flip_expand(goafile, obsfile, flatfile)
     obo = {}
     for term in parse_obo(obofile):
