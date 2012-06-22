@@ -363,16 +363,58 @@ class NumericDataset(SOFTRecord):
 
         t, pvals = stats.ttest_ind(A, B)
         rejected, qvals = multitest.fdrcorrection(pvals, alpha=qval_limit)
-        """ Old testing stuff...
-        pvs = sorted(pvals)
-        qvs = sorted(qvals)
-        for i, x in enumerate(qvs):
-            if i * x > 1:
-                print "qval: %f\t pval: %f\t index:%d" % (x, pvs[i], i)
-                break
-        """
-        # probe values are [probe_name, entrez_id] form (hence x[1])
+
+        # probe values are [probe_name, entrez_id] form (hence x[0])
         diffexp = [x[0] for i, x in enumerate(probes) if qvals[i] < qval_limit]
         if verbose:
             print("%d samples, %d differentially expressed genes in %s: %s" % (len([x for x in inA if x]), len(diffexp), _factor, _subset))
         return diffexp
+
+
+    def diffexpressed_alt(self, _subset, _factor, pval_cutoff, d_avg_cutoff, verbose=True, more=False):
+        """Returns an array of probes that are differentially expressed according
+        to the following method:
+
+        1)  Perform an independent t-test on the probe values for the specified
+            subset against the probe values for the non-subset samples.
+        2)  Measure the magnitude of difference between the mean value for
+            each probe across the subset samples and the mean value for the
+            non-subset samples.
+        3)  Filter results from 1) and 2) based on specified cutoffs
+        4)  Return the probes that were significant in both measures.
+
+        Consider the effects of multiple comparisons when selecting the p-value
+        cutoff.
+
+        Arguments:
+            _subset:    the subset to test for expressed genes
+            _factor:    the factor the subset belongs to
+            pval_cutoff:    the maximum p-value to consider significant
+            d_avg_cutoff:   the minimum difference in magnitude
+        """
+
+        matrix = self.matrix
+        probes = self.probes
+        samples = self.factors[_factor][_subset]
+        nprobes = range(len(matrix))
+
+        inA = array([x in samples for x in self.header[2:]])
+        A = numpy.transpose(matrix[:, inA])
+        B = numpy.transpose(matrix[:, numpy.invert(inA)])
+        mA = numpy.mean(A, axis=0)
+        mB = numpy.mean(B, axis=0)
+
+        t, pvals = stats.ttest_ind(A, B)
+        # boolean arrays (T if significant, F otherwise) for the cutoffs
+        sig_pvals = [x < pval_cutoff for x in pvals]
+        sig_diffs = [abs(mA[i] - mB[i]) > d_avg_cutoff for i in nprobes]
+        sig_union = array([sig_pvals[i] and sig_diffs[i] for i in nprobes])
+        diffexp = probes[sig_union, :]
+        if verbose:
+            print("{} samples, {} differentially expressed genes in {}: {}".format(len([x for x in inA if x]), len(diffexp), _factor, _subset))
+        if more:
+            return diffexp, pvals, (A, B, mA, mB), (sig_pvals, sig_diffs, sig_union)
+        else:
+            return diffexp
+
+        

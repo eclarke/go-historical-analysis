@@ -81,7 +81,7 @@ def main(file_or_accn, annotation_files):
     return enriched_terms
 
 
-def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
+def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map, not_EASE=False):
     """
     Conducts a modified Fisher's exact test (aka EASE score) on the differentially 
     expressed genes and the provided gene list for the term. The test is modified
@@ -97,6 +97,7 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
     not_diffexp: a list of genes *not* differentially expressed in the background
     background: all genes (often all genes tested by the probe set)
     term: a dict of the form {'name':'term name', 'genes':['1234','1235',...]}
+    not_EASE: do a traditional Fisher's exact test, not the EASE modification
     """
 
     if not diffexp:
@@ -111,7 +112,11 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map):
     # +–––––-----–+–-–––––+   g = geneset,  ng = not geneset)
     # |    ng_e   | ng_ne |
 
-    g_e = len(intersect1d(term_genes, diffexp)) - 1
+    if not_EASE:
+        g_e = len(intersect1d(term_genes, diffexp))
+    else:
+        g_e = len(intersect1d(term_genes, diffexp)) - 1
+
     if g_e < 1:
         return 1.0
     g_ne = len(intersect1d(term_genes, not_diffexp))
