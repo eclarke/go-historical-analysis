@@ -97,7 +97,7 @@ def import_replace_flip_expand(goafile, obsfile, flatfile, keep_iea):
     goa = expand_goa(
             flip_goa(
                 replace_obs(
-                    parse_goa(goafile, filter_iea=!keep_iea),
+                    parse_goa(goafile, filter_iea=not keep_iea),
                 obs)),
           gof)
     return goa

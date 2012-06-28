@@ -411,10 +411,10 @@ class NumericDataset(SOFTRecord):
         sig_union = array([sig_pvals[i] and sig_diffs[i] for i in nprobes])
         diffexp = probes[sig_union, :]
         if verbose:
-            print("{} samples, {} differentially expressed genes in {}: {}".format(len([x for x in inA if x]), len(diffexp), _factor, _subset))
+            print("%s samples, %s differentially expressed genes in %s: %s" % (len([x for x in inA if x]), len(diffexp), _factor, _subset))
         if more:
             return diffexp, pvals, (A, B, mA, mB), (sig_pvals, sig_diffs, sig_union)
         else:
-            return diffexp
+            return [x[0] for x in diffexp]
 
         
