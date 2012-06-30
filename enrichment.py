@@ -131,6 +131,8 @@ def store_in_db(fn):
         with closing(db.cursor()) as c:
             col_results = []
             for goid, pval in results.iteritems():
+                if pval == 1:
+                    continue # we don't need to store pvals of 1
                 _id = md5hash(dataset.id, factor, subset, year, ontology)
                 _subid = md5hash(goid, _id)
                 col_results.append((_id, _subid, ontology, goid, annotations[goid]['name'], pval, dataset.id,

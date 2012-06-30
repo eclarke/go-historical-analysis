@@ -61,8 +61,8 @@ def insert_metadata(datasets):
                 print "inserting annotations...",
                 desc_sql = "REPLACE INTO annotations(dataset, goid, term, source) values('%s', %%s, %%s, '%s')" % (did, 'description')
                 c.executemany(desc_sql, desc_annos)
-                abst_sql = "REPLACE INTO annotations(dataset, goid, term, source) values('%s', %%s, %%s, '%s')" % (did, 'abstract')
                 if abstract:
+                    abst_sql = "REPLACE INTO annotations(dataset, goid, term, source) values('%s', %%s, %%s, '%s')" % (did, 'abstract')
                     c.executemany(abst_sql, abst_annos)
                 db.commit()
                 print "done.\n"
