@@ -149,7 +149,7 @@ def goa2gmt(fgoa, obo=None):
 
 
 def import_annotations(goafile, obsfile, flatfile, obofile, year=None, keep_iea=True):
-    goa = import_replace_flip_expand(goafile, obsfile, flatfile)
+    goa = import_replace_flip_expand(goafile, obsfile, flatfile, keep_iea)
     obo = {}
     for term in parse_obo(obofile):
         obo[term['id']] = term

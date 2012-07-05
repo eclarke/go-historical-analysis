@@ -15,19 +15,19 @@ flatfile = 'data/go-%d.flat'
 # A current GO structure (in obo format) to reference GOID->names
 go_ext_obo = 'data/gene_ontology_ext.obo'
 
-assert all([os.path.isfile(x) for x in (obsoletes, flatfile, go_ext_obo)])
+assert all([os.path.isfile(x) for x in (obsoletes, go_ext_obo)])
 
 def main(years, namefmt, keep_iea):
 
     for year in years:
-        goafile = glob.glob('goa_human-*-%d' % year)
+        goafile = glob.glob('data/goa_human-*-%d' % year)
         if goafile:
             goafile = goafile[0]
             print("Found goafile for %d at %s" % (year, goafile))
         else:
             print("Could not find human goa file for %d, skipping" % year)
             continue
-        annotations = import_annotations(goafile, obsfile, flatfile % year, go_ext_obo, str(year), keep_iea)
+        annotations = import_annotations(goafile, obsoletes, flatfile % year, go_ext_obo, str(year), keep_iea)
         with open(namefmt % year, 'wb') as out:
             json.dump(annotations, out)
 
