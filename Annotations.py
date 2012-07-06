@@ -42,9 +42,9 @@ def parse_goa(goafile, filter_nonuniprot=True, filter_iea=False):
         print set([x[0] for x in goa])
     for line in goa:
         if (filter_nonuniprot and 'UniProt' in line[0]) or (filter_iea and line[6] != 'IEA'):
-            _append(gdict, line[1], set(line[4]))
+            _append(gdict, line[1], set((line[4],)))
             if verbose:
-                print 'added ', line[1], set(line[4])
+                print 'added ', line[1], set((line[4],))
     return gdict
 
 
@@ -154,9 +154,11 @@ def import_annotations(goafile, obsfile, flatfile, obofile, year=None, keep_iea=
     for term in parse_obo(obofile):
         obo[term['id']] = term
     annotations = {'meta': {'year': year}, 'anno': {}}
+    go_struct = parse_flat(flatfile)
     for entry in goa:
         annotations['anno'][entry] = {
             'name': obo[entry]['name'] if entry in obo else 'n/a',
-            'genes': list(goa[entry])
+            'genes': list(goa[entry]),
+            'parents': list(go_struct[entry])
         }
     return annotations
