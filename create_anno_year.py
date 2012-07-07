@@ -10,8 +10,8 @@ Annotations.verbose = True
 
 # Downloaded from Uniprot, lists each obsolete Uniprot ID and its fate. (deleted, merged, demerged, etc)
 obsoletes = 'data/obsolete.list'
-# The name of the flat ontology structure from a given year, produced by go_flattener.jar (eats .owl files)
-flatfile = 'data/go-%d.flat'
+# The name of the flat ontology structure from a given year, produced by go_flattener.jar (which eats .owl files)
+flatfile = 'data/go-%d.new.flat'
 # A current GO structure (in obo format) to reference GOID->names
 go_ext_obo = 'data/gene_ontology_ext.obo'
 

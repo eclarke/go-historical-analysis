@@ -9,6 +9,7 @@ import re
 import json
 from copy import deepcopy
 from collections import defaultdict
+import random
 
 # hooray for global vars
 verbose = False
@@ -161,4 +162,24 @@ def import_annotations(goafile, obsfile, flatfile, obofile, year=None, keep_iea=
             'genes': list(goa[entry]),
             'parents': list(go_struct[entry])
         }
+    return annotations
+
+
+def shuffle(_annotations, percentage):
+    assert percentage <= 1
+    r = random.Random()
+    r.seed()
+    annotations = deepcopy(_annotations)
+    annos = annotations['anno']
+    for idx, term in enumerate(annos.keys()):
+        genes = annos[term]['genes']
+        l = len(genes)
+        rm = int(l * percentage)
+        print("(%d/%d) Moving %d/%d genes to other sets" % (idx, len(annos), rm, l))
+        random.shuffle(genes)
+        migrants = [genes.pop() for x in xrange(0, rm)]
+        annos[term]['genes'] = genes
+        for i in migrants:
+            destination = random.choice(annos.keys())
+            annos[destination]['genes'].append(i)
     return annotations
