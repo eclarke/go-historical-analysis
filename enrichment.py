@@ -39,16 +39,16 @@ MYDB = config.get('MySQL', 'db')
 set_isolation_level = """set session transaction isolation level read committed"""
 
 store_results_sql = """
-replace into results (_id, _subid, ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max)
+replace into {table} (_id, _subid, ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max)
  values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 select_pvals_sql = """
-select _subid, pval from results where _id=%s
+select _subid, pval from {table} where _id=%s
 """
 
 insert_qval_sql = """
-update results set qval=%s where _subid=%s
+update {table} set qval=%s where _subid=%s
 """
 
 mapfile = 'data/uniprot2entrez.json'
@@ -137,6 +137,7 @@ def store_in_db(fn):
                 _subid = md5hash(goid, _id)
                 col_results.append((_id, _subid, ontology, goid, annotations[goid]['name'], pval, dataset.id,
                                     factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE))
+            assert '{table}' not in store_results_sql
             c.executemany(store_results_sql, col_results)
             db.commit()
         db.close()
@@ -203,7 +204,7 @@ def multitest_correction(dataset, ontology, annotation_files):
 def _usage():
     print("Inserts into mysql database specified in settings.cfg results from the enrichment analysis of the given dataset "
           "against the specified annotation files, using one of the sub-ontologies specified.\n")
-    print("Usage: python fdr_correction.py <GDS file or accn> <[MF, CC, BP]> <anno file 1> [more anno files...]")
+    print("Usage: python fdr_correction.py <GDS file or accn> <[MF, CC, BP]> <SQL table name to use> <anno file 1> [more anno files...]")
     print("\n See README.md for more information.")
     sys.exit(1)
 
@@ -214,7 +215,13 @@ if __name__ == '__main__':
 
     file_or_accn = sys.argv[1]
     ontology = sys.argv[2]
-    annotation_files = sys.argv[3:]
+    table = sys.argv[3]
+    annotation_files = sys.argv[4:]
+
+    # set SQL table to insert results into
+    store_results_sql = store_results_sql.format(table=table)
+    select_pvals_sql = select_pvals_sql.format(table=table)
+    insert_qval_sql = insert_qval_sql.format(table=table)
     
     # this file can be downloaded from Uniprot's mapping service
     uniprot2entrez_map = json.load(open(mapfile))
