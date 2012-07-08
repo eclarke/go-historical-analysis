@@ -9,6 +9,7 @@ import re
 import json
 from copy import deepcopy
 from collections import defaultdict
+import random
 
 # hooray for global vars
 verbose = False
@@ -42,9 +43,9 @@ def parse_goa(goafile, filter_nonuniprot=True, filter_iea=False):
         print set([x[0] for x in goa])
     for line in goa:
         if (filter_nonuniprot and 'UniProt' in line[0]) or (filter_iea and line[6] != 'IEA'):
-            _append(gdict, line[1], set(line[4]))
+            _append(gdict, line[1], set((line[4],)))
             if verbose:
-                print 'added ', line[1], set(line[4])
+                print 'added ', line[1], set((line[4],))
     return gdict
 
 
@@ -88,7 +89,7 @@ def replace_obs(goa, obs):
     return goa_cp
 
 
-def import_replace_flip_expand(goafile, obsfile, flatfile):
+def import_replace_flip_expand(goafile, obsfile, flatfile, keep_iea):
     """This does all the necessary transformations to a gene annotation
     file given a list of obsolete UniProt terms and a flattened file
     that describes all isa and has_part relationships."""
@@ -97,7 +98,7 @@ def import_replace_flip_expand(goafile, obsfile, flatfile):
     goa = expand_goa(
             flip_goa(
                 replace_obs(
-                    parse_goa(goafile),
+                    parse_goa(goafile, filter_iea=not keep_iea),
                 obs)),
           gof)
     return goa
@@ -148,15 +149,37 @@ def goa2gmt(fgoa, obo=None):
     return lines
 
 
-def import_annotations(goafile, obsfile, flatfile, obofile, year=None):
-    goa = import_replace_flip_expand(goafile, obsfile, flatfile)
+def import_annotations(goafile, obsfile, flatfile, obofile, year=None, keep_iea=True):
+    goa = import_replace_flip_expand(goafile, obsfile, flatfile, keep_iea)
     obo = {}
     for term in parse_obo(obofile):
         obo[term['id']] = term
     annotations = {'meta': {'year': year}, 'anno': {}}
+    go_struct = parse_flat(flatfile)
     for entry in goa:
         annotations['anno'][entry] = {
             'name': obo[entry]['name'] if entry in obo else 'n/a',
-            'genes': list(goa[entry])
+            'genes': list(goa[entry]),
+            'parents': list(go_struct[entry])
         }
+    return annotations
+
+
+def shuffle(_annotations, percentage):
+    assert percentage <= 1
+    r = random.Random()
+    r.seed()
+    annotations = deepcopy(_annotations)
+    annos = annotations['anno']
+    for idx, term in enumerate(annos.keys()):
+        genes = annos[term]['genes']
+        l = len(genes)
+        rm = int(l * percentage)
+        print("(%d/%d) Moving %d/%d genes to other sets" % (idx, len(annos), rm, l))
+        random.shuffle(genes)
+        migrants = [genes.pop() for x in xrange(0, rm)]
+        annos[term]['genes'] = genes
+        for i in migrants:
+            destination = random.choice(annos.keys())
+            annos[destination]['genes'].append(i)
     return annotations

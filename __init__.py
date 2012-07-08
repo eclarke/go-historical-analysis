@@ -19,6 +19,7 @@ import os
 import urllib
 import tempfile
 import gzip
+import time
 
 from Records import Record, Dataset, Series
 
@@ -28,16 +29,17 @@ from Records import Record, Dataset, Series
 def _download(url, outfile):
     '''Ensures correct download of gzip files.'''
     handle = urllib.urlopen(url)
-    while True:
-        packet = handle.read()
-        if not packet:
-            break
-        outfile.write(packet)
+    with open(outfile, 'wb') as outf:
+        while True:
+            packet = handle.read()
+            if not packet:
+                break
+            outf.write(packet)
     handle.close()
-    return os.path.abspath(outfile.name)
+    return os.path.abspath(outfile)
 
 
-def _get_remote(accn, destdir, amount, verbose):
+def _get_remote(accn, destdir, amount, verbose, tries=0):
     if not amount in ('full', 'brief', 'quick', 'data'):
         raise ValueError("Valid options for `amount` are full, brief, quick, ",
             "or data.")
@@ -65,19 +67,26 @@ def _get_remote(accn, destdir, amount, verbose):
             print "Found existing copy at ", outfile
         return outfile
     else:
-        outfile = open(outfile, 'wb')
-    if verbose:
-        print "Downloading ", filename
-    try:
-        downloaded = _download(url, outfile)
-    except IOError:
-        print "error: invalid: ", url
-    if verbose:
-        print "File stored at: ", downloaded
-    return downloaded
+        if verbose:
+            print "Downloading ", filename
+        try:
+            downloaded = _download(url, outfile)
+        except IOError as e: 
+            print "IOError '%s', retrying..." % e
+            time.sleep(5)
+            tries += 1
+            if tries > 5:
+                print "Maximum retries exceeded; aborting."
+                os.remove(outfile)
+                raise
+            _get_remote(accn, destdir, amount, verbose, tries)
+        
+        if verbose:
+            print "File stored at: ", downloaded
+        return downloaded
 
 
-def fetch(accn_or_file, destdir=None, amount='full', verbose=True):
+def fetch(accn_or_file, destdir=None, amount='full', verbose=True, tries=0):
     if os.path.isfile(accn_or_file):
         geo = accn_or_file
     else:
