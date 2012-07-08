@@ -12,7 +12,7 @@ BEGIN
     SELECT year, dataset, subset, term, pval, qval
         FROM results, 
             (SELECT dataset, subset, term, pval 
-                FROM results WHERE year == 2012 
+                FROM results WHERE year = 2012 
                 ORDER BY pval LIMIT 10) as top
         WHERE dataset like top.dataset 
             AND subset like top.subset
