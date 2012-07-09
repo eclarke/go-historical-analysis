@@ -1,0 +1,4 @@
+isa: contains annotations expanded using only the is_a relationship
+parts: annotations expanded using the is_a and has_part relationships
+shuffled: annotations shuffled to varying degrees (shuffled10 = 10% of genes randomly reassigned)
+	  .new in filename indicates expansion with is_a and has_parts relationships
