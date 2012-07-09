@@ -33,9 +33,9 @@ SCRIPT_CONTENTS = """
 #PBS -j oe
 
 cd go
-python {pyscriptname} {gds} BP data/goa-*.json
-python {pyscriptname} {gds} MF data/goa-*.json
-python {pyscriptname} {gds} CC data/goa-*.json
+python {pyscriptname} {gds} BP results anno/iea/goa-*.json
+python {pyscriptname} {gds} MF results anno/iea/goa-*.json
+python {pyscriptname} {gds} CC results anno/iea/goa-*.json
 """
 
 def spawn(gds, scriptname, after, dryrun):
