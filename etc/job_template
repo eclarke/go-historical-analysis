@@ -1,0 +1,10 @@
+#PBS -l nodes={nodes}:ppn={ppn}
+#PBS -l mem=20gb
+#PBS -l walltime={hours}:00:00
+#PBS -N {name}
+#PBS -j oe
+cd go                                                                                                                                                                               
+
+python {pyscriptname} {gds} BP {table} {anno_files}
+python {pyscriptname} {gds} MF {table} {anno_files}
+python {pyscriptname} {gds} CC {table} {anno_files}
