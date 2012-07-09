@@ -22,15 +22,15 @@ from argparse import ArgumentParser
 
 def spawn(gds, config, dryrun):
     pyscript = config.get('Job', 'pyscript')
-    jobname = config.get('Job', 'name').format(gds=gds, pyscript=pyscript)
-    template = open(config.get('Job', 'template'), 'wb').read()
-    args = dict(config.items('Template'))
+    jobname = config.get('Job', 'name').format(gds=gds)
+    template = open(config.get('Job', 'template')).read()
+    args = dict(config.items('Template')+config.items('Job'))
+    args['gds'] = gds
     outfile = config.get('Job', 'jobscript')
     
-    jobscript = create_job_script(template, args, outfile)
+    script_file = create_job_script(template, args, outfile)
 
-    script_file = create_job_script(args, config)
-    command = config.get('Job', 'command')
+    command = config.get('Job', 'command').format(gds=gds)
     jobid = subprocess.check_output([x for x in command.split(' ') if x]) if not dryrun else script_file
     return jobid, command
 
