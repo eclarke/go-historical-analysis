@@ -335,7 +335,7 @@ class NumericDataset(SOFTRecord):
     def filtered(self):
         return self._filtered
 
-    def diffexpressed(self, _subset, _factor, fdr_limit, verbose=True):
+    def diffexpressed(self, _subset, _factor, qval_limit, verbose=True):
         """Returns an array of probes that are differentially expressed according
         to the following method:
 

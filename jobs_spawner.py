@@ -3,90 +3,71 @@
 
 """
 Jobs Spawner: Spawns a new PBS job for each dataset in a given list of GDS accession numbers.
-The job conducts an enrichment analysis of the dataset using historical Gene Ontology annotations,
-storing the results in a SQLite database (generally 'results.db').
+The specifics of the job are specified in a config file (default: config/job.settings.cfg) which can
+be specified using the --config option.
 
-The number of concurrent jobs spawned can be defined on the command line.
+To be sure that the config file contains the correct fields, run with --dryrun first. This runs 
+through the entire script except for submitting the job to the cluster.
 
-Usage: python jobs_spawner.py <file listing GDS accns, one per line> [max concurrent jobs]
+Usage: python jobs_spawner <list of datasets> [--config CONFIG_FILE] [--dryrun]
 
 Author: eclarke@scripps.edu
 """
 
 import sys
 import subprocess
+from ConfigParser import SafeConfigParser
+from argparse import ArgumentParser
 
-# Job-specific options
-NODES = 1            # we don't have MPI capabilities so no point in increasing this
-PROC_PER_NODE = 8    # max cores for garibaldi machines
-WALLTIME = 15        # in hours
 
-JOBNAME = "{GDS}-{pyscript}-ea.job"
-SCRIPT_FILE = "jobs/{jobname}.sh"
-COMMAND = "qsub {seriesopts} {scriptfile}"
+def spawn(gds, config, dryrun):
+    pyscript = config.get('Job', 'pyscript')
+    jobname = config.get('Job', 'name').format(gds=gds)
+    template = open(config.get('Job', 'template')).read()
+    args = dict(config.items('Template')+config.items('Job'))
+    args['gds'] = gds
+    outfile = config.get('Job', 'jobscript')
+    
+    script_file = create_job_script(template, args, outfile)
 
-SCRIPT_CONTENTS = """
-#PBS -l nodes={nodes}:ppn={proc_per_node}
-#PBS -l mem=20gb
-#PBS -l walltime={hours}:00:00
-#PBS -N {name}
-#PBS -j oe
-
-cd go
-python {pyscriptname} {gds} BP data/goa-*.json
-python {pyscriptname} {gds} MF data/goa-*.json
-python {pyscriptname} {gds} CC data/goa-*.json
-"""
-
-def spawn(gds, scriptname, after, dryrun):
-    jobname = JOBNAME.format(GDS=gds, pyscript=scriptname)
-    args = {'nodes': NODES,
-            'proc_per_node': PROC_PER_NODE,
-            'hours': WALLTIME,
-            'name': jobname,
-            'script': SCRIPT_FILE.format(jobname=jobname),
-            'gds':gds,
-            'pyscriptname':scriptname}
-
-    script_file = create_job_script(args)
-    series_options = '-W depend=afterany:'+after if after else ''
-    command = COMMAND.format(seriesopts=series_options,
-                             scriptfile=script_file)
+    command = config.get('Job', 'command').format(gds=gds)
     jobid = subprocess.check_output([x for x in command.split(' ') if x]) if not dryrun else script_file
     return jobid, command
 
 
-def create_job_script(args):
-    script = SCRIPT_CONTENTS.format(**args)
-    with open(args['script'], 'wb') as scriptfile:
-        scriptfile.write(script)
-    return args['script']
+def create_job_script(script, args, outfile):
+    script = script.format(**args)
+    with open(outfile, 'wb') as out:
+        out.write(script)
+    return outfile
 
+
+def main():
+    parser = ArgumentParser(description="Spawn jobs on Garibaldi using the Torque queue system. Job options specified in config file.")
+    parser.add_argument('--config', action='store', dest="cfg_file", help="File with configuration options", default='configs/job.settings.cfg')
+    parser.add_argument('--dryrun', action='store_true', default=False, dest="dryrun", help="Create job script in jobs/ but do not launch on cluster.")
+    parser.add_argument('-d', nargs='+', action='store', dest="datasets", help="One or more GEO dataset accessions")
+    parser.add_argument('-f', action='store', dest="datasets_file", help="File listing GEO datasets, one per line", type=file)
+
+    args = parser.parse_args()
+
+    config = SafeConfigParser()
+    config.read(args.cfg_file)
+
+    if args.datasets:
+        accessions = args.datasets
+    elif args.datasets_file:
+        accessions = [x.strip("\n") for x in args.datasets_file]
+        args.datasets_file.close()
+    else:
+        print "Must specify GEO datasets, either in file or on command line."
+        parser.print_usage()
+        return
+
+    for i, accn in enumerate(accessions):
+        job, command = spawn(accn, config, args.dryrun)
+        print "%s launched with command: '%s'" % (job, command)
+    
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python jobs_spawner.py <file listing GDS accns, one per line> [fdr] [dryrun] -m [max concurrent jobs]")
-        sys.exit(1)
-
-    with open(sys.argv[1]) as infile:
-        accns = [x.strip('\n') for x in infile.readlines()]
-
-    print "numargs: ", len(sys.argv)
-    if '-m' in sys.argv:
-        max_concurrent = int(sys.argv[sys.argv.index('-m')+1])
-    else:
-        max_concurrent = len(accns)
-
-    dryrun = 'dryrun' in sys.argv
-
-    jobs = []
-    after = None
-    print "launching %d jobs in groups of %d" % (len(accns), max_concurrent)
-    for i, accn in enumerate(accns):
-        after = jobs[i-1] if i > 0 and (i % max_concurrent) == 0 else after
-        if i > max_concurrent:
-            assert after
-        pyscriptname = 'enrichment.py' if ('fdr' not in sys.argv) else 'fdr_correction.py'
-        job, command = spawn(accn, pyscriptname, after=after, dryrun=dryrun)
-        print "%s launched with command: '%s'" % (job, command)
-        jobs.append(job)
+    main()

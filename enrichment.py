@@ -11,6 +11,7 @@ import time
 from multiprocessing import Process
 from collections import defaultdict
 from ConfigParser import ConfigParser
+from optparse import OptionParser
 from contextlib import closing
 from statsmodels.stats import multitest
 import MySQLdb as mysql
@@ -19,40 +20,21 @@ from __init__ import fetch
 import enrichment_analysis as ea
 from Annotations import parse_flat
 
-config = ConfigParser()
-config.read('settings.cfg')
-
-ANNO_MAX_SIZE = config.getint('Annotations', 'max size')
-ANNO_MIN_SIZE = config.getint('Annotations', 'min size')
-
-QVAL_CUTOFF = config.getfloat('FDR', 'cutoff')
-NCORES = multiprocessing.cpu_count()
-
-
-# MySQL settings
-MYUSER = config.get('MySQL', 'user')
-MYHOST = config.get('MySQL', 'host')
-MYPASS = config.get('MySQL', 'pass')
-MYDB = config.get('MySQL', 'db')
-
 # MySQL commands (reference results_db_schema.sql)
 set_isolation_level = """set session transaction isolation level read committed"""
 
 store_results_sql = """
-replace into results (_id, _subid, ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max)
- values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+replace into {table} (ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max, min_depth, max_depth, min_var, filter_similar, filter_size, filter_depth)
+ values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 select_pvals_sql = """
-select _subid, pval from results where _id=%s
+select goid, pval from {table} where dataset=%s and subset=%s and year=%s and ontology=%s
 """
 
 insert_qval_sql = """
-update results set qval=%s where _subid=%s
+update {table} set qval=%s where dataset=%s and subset=%s and year=%s and ontology=%s and goid=%s
 """
-
-mapfile = 'data/uniprot2entrez.json'
-
 
 def split(iterable, blocks=8):
     if isinstance(iterable, dict):
@@ -71,17 +53,42 @@ def split(iterable, blocks=8):
         return returnlist
 
 
-def filter_annos(annotation_dict, _max=ANNO_MAX_SIZE, _min=ANNO_MIN_SIZE):
+def filter_annos(annotations, _max, _min):
     """Removes annotations that are composed of more than 'max' genes
     or fewer than 'min'.
     This returns a filtered copy."""
     
-    returndict = dict(annotation_dict)
-    for k, v in annotation_dict.iteritems():
+    returned = dict(annotations)
+    for k, v in annotations.iteritems():
         if len(v['genes']) > _max or len(v['genes']) < _min:
-            del returndict[k]
-    print "Removed %d terms from annotation set." % (len(annotation_dict) - len(returndict))
-    return returndict
+            del returned[k]
+    print "Removed %d terms from annotation set." % (len(annotations) - len(returned))
+    return returned
+
+
+def filter_annos_by_depth(annotations, min_depth, max_depth):
+    returned = dict(annotations)
+    for k, v in annotations.iteritems():
+        if len(v['parents']) < min_depth or len(v['parents']) > max_depth:
+            del returned[k]
+    print "Removed %d terms from annotation set." % (len(annotations) - len(returned))
+    return returned
+
+
+def filter_similar_terms(annotations, min_variance):
+    returned = dict(annotations)
+    for k, v in annotations.iteritems():
+        parents = v['parents']
+        genes = v['genes']
+        for p in parents:
+            if p in annotations:
+                pgenes = annotations[p]['genes']
+                if (len(pgenes)-len(genes)) < min_variance:
+                    if k in returned:
+                        del returned[k]
+                    continue
+    print "Removed %d terms from annotation set." % (len(annotations) - len(returned))
+    return returned
 
 
 def restrict_subontology(annotation_dict, ontology, year):
@@ -119,10 +126,6 @@ def get_connection(max_retries=30):
     raise mysql.OperationalError("Failed to connect after %d retries" % max_retries)
 
 
-def md5hash(*args):
-    return hashlib.md5(''.join(args)).hexdigest()
-
-
 def store_in_db(fn):
     def store(dataset, platform, factor, subset, annotations, year, num_annos, ontology, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
@@ -133,10 +136,11 @@ def store_in_db(fn):
             for goid, pval in results.iteritems():
                 if pval == 1:
                     continue # we don't need to store pvals of 1
-                _id = md5hash(dataset.id, factor, subset, year, ontology)
-                _subid = md5hash(goid, _id)
-                col_results.append((_id, _subid, ontology, goid, annotations[goid]['name'], pval, dataset.id,
-                                    factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE))
+                _id = (dataset.id, factor, subset, year, ontology)
+                _subid =  _id+(goid,)
+                col_results.append((ontology, goid, annotations[goid]['name'], pval, dataset.id,
+                                    factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE, MIN_DEPTH, MAX_DEPTH, MIN_VARIANCE, FILTER_SIMILAR, FILTER_BY_SIZE, FILTER_BY_DEPTH))
+            assert '{table}' not in store_results_sql
             c.executemany(store_results_sql, col_results)
             db.commit()
         db.close()
@@ -183,12 +187,12 @@ def multitest_correction(dataset, ontology, annotation_files):
         for subset in dataset.factors[factor]:
             print "[%s]-[%s]-[%s]-[%s]:" % (dataset.id, year, ontology, subset),
             with closing(db.cursor()) as c:
-                _id = md5hash(dataset.id, factor, subset, year, ontology)
+                _id = (dataset.id, factor, subset, year, ontology)
                 print "selecting pvals... ",
                 c.execute(select_pvals_sql, _id)
                 results = list(c.fetchall())    # list of tuples [(_subid, pval), ...]
             pvals = [x[1] for x in results] 
-            subids = [x[0] for x in results]
+            subids = [_id+(x[0],) for x in results]
             print "calculating FDR... ",
             rejected, qvals = multitest.fdrcorrection(pvals)
             results = zip(qvals, subids)
@@ -200,24 +204,10 @@ def multitest_correction(dataset, ontology, annotation_files):
     db.close()
 
 
-def _usage():
-    print("Inserts into mysql database specified in settings.cfg results from the enrichment analysis of the given dataset "
-          "against the specified annotation files, using one of the sub-ontologies specified.\n")
-    print("Usage: python fdr_correction.py <GDS file or accn> <[MF, CC, BP]> <anno file 1> [more anno files...]")
-    print("\n See README.md for more information.")
-    sys.exit(1)
-
-
-if __name__ == '__main__':
-    if len(sys.argv) < 3 or len(sys.argv[2]) != 2:
-        _usage()
-
-    file_or_accn = sys.argv[1]
-    ontology = sys.argv[2]
-    annotation_files = sys.argv[3:]
+def main(file_or_accn, annotation_files, ontology):
     
     # this file can be downloaded from Uniprot's mapping service
-    uniprot2entrez_map = json.load(open(mapfile))
+    uniprot2entrez_map = json.load(open(MAPFILE))
     assert len(uniprot2entrez_map) > 27000
 
     # import the dataset
@@ -235,9 +225,17 @@ if __name__ == '__main__':
 
     for annotations in annotation_years:
         year = annotations['meta']['year']
-        print "Filtering out annotation gene sets greater than %d and less than %d" % (ANNO_MAX_SIZE, ANNO_MIN_SIZE)
-        filtered_annotations = filter_annos(annotations['anno'])
-        filtered_annotations = restrict_subontology(filtered_annotations, ontology, year)
+        annos = annotations['anno']
+        if FILTER_SIMILAR:
+            print "Filtering out terms with less than a %d-gene difference from their parents" % MIN_VARIANCE
+            annos = filter_similar_terms(annos, MIN_VARIANCE)
+        if FILTER_BY_DEPTH:
+            print "Filtering out terms with fewer than %d or greater than %d parents" % (MIN_DEPTH, MAX_DEPTH)
+            annos = filter_annos_by_depth(annos, MIN_DEPTH, MAX_DEPTH)
+        if FILTER_BY_SIZE:
+            print "Filtering out annotation gene sets greater than %d and less than %d" % (ANNO_MAX_SIZE, ANNO_MIN_SIZE)
+            annos = filter_annos(annos, ANNO_MAX_SIZE, ANNO_MIN_SIZE)
+        filtered_annotations = restrict_subontology(annos, ontology, year)
         blocks = split(filtered_annotations, blocks=NCORES)
         print("Split %d annotations into %d blocks of ~%d terms each..." % (len(filtered_annotations), len(blocks), len(blocks[0])))
         # We're actually going to only look at "disease state" factors for this analysis.
@@ -255,30 +253,96 @@ if __name__ == '__main__':
             [p.join() for p in jobs] # wait for them all to finish
 
 
+def print_usage():
+    import textwrap
+    usage = """Conducts an enrichment analysis on the given dataset
+using the specified GO sub-ontology and annotation files. The enriched
+terms are then stored in a MySQL database along with p-values and other data.
+Specific options are defined in config files, which can be passed to the
+program with the --config <CFG_FILE> option. By default, the script looks for
+configs/settings.cfg."""
 
-        # Calculate the q-values now that we have all the p-values, and also add the number of terms
-        """ This should be in a separate process that runs *after* we have all the pvals 
-        for subset in dataset.factors[factor]:
-            db = get_connection(100)
-            with closing(db.cursor()) as c:
-                c.execute(select_results_sql, (dataset.id, subset, int(year)))
-                results = list(c.fetchall())    # list of tuples [(id, pval), ...]
-                
-            pvals = [x[1] for x in results] 
-            ids = [x[0] for x in results]
-            rejected, qvals = multitest.fdrcorrection(pvals)
-            results = zip(ids,qvals)
-            postinfo = [(qval, ontology, len(filtered_annotations), ANNO_MAX_SIZE, ANNO_MIN_SIZE, id)
-                        for id, qval in results]
-            print("Main: Inserting (or waiting to insert) additional information into results for subset...")
-            for postinfo_chunk in split(postinfo, 4):
-                with closing(db.cursor()) as c:
-                    c.executemany(insert_postinfo_sql, postinfo)
-                    db.commit()
-            db.close()
+    print(textwrap.fill(usage,79))
+    print("\nSee README.md for more detailed information.\n")
 
-        print("Main: Updated results for annotation year %s" % year)
-        """
+if __name__ == '__main__':
+    parser = OptionParser()
+    config = ConfigParser()
+
+    if '--config' in sys.argv:
+        cfg_file = sys.argv[sys.argv.index('--config')+1]
+        config.read(opts.config)
+    else:
+        config.read("configs/settings.cfg")
+
+    parser.add_option('--config', action='store', dest='config', default='configs/settings.cfg', help="Alternate configuration file")
+    parser.add_option('-d', action='store', dest='dataset', help="REQUIRED: Accession number of GEO dataset to analyze")
+    parser.add_option('-o', action='store', type='choice', choices=['MF','CC','BP'], dest='ontology', help="REQUIRED: GO sub-ontology to use (MF, CC, BP)")
+    parser.add_option('-a', action='append', dest='annotation_files', help="REQUIRED: Annotation files (can specify multiple) in .json format")
+    parser.add_option('--use_shuffled', action='store_true', default=False, dest='shuffled', help="Work with shuffled annotations")
+    parser.add_option('--filter_by_size', action='store_true', default=True, dest='filter_size', 
+                      help="Filter out term that have more or less than the specified max and min gene set sizes")
+    parser.add_option('--filter_by_depth', action='store_true', default=False, dest='filter_depth', 
+                      help="Filter terms by ontology depth (terms above/below a certain depth are omitted)") 
+    parser.add_option('--filter_similar', action='store_true', default=False, dest='filter_similar', 
+                      help="Filter out terms that have less than a certain number of genes not in common with their parents")
+    parser.add_option('--max_depth', action='store', type=int, dest='max_depth', 
+                      default=config.getint('Annotations', 'max depth'), help="Maximum ontology depth of terms")
+    parser.add_option('--min_depth', action='store', type=int, dest='min_depth', 
+                      default=config.getint('Annotations', 'min depth'), help="Minimum ontology depth of terms")
+    parser.add_option('--max_size', action='store', type=int, dest='max_size', 
+                      default=config.getint('Annotations', 'max size'), help="Maximum number of genes annotated to term")
+    parser.add_option('--min_size', action='store', type=int, dest='min_size', 
+                      default=config.getint('Annotations', 'min size'), help="Minimum number of genes annotated to term")
+    parser.add_option('--min_var', action='store', type=int, dest='min_variance', 
+                      default=config.getint('Annotations', 'min variance'), help="Minimum number of genes a child term must have different from a parent")
+    parser.add_option('--max_fdr', action='store', type=float, dest='max_fdr', 
+                      default=config.getfloat('FDR', 'cutoff'), help="FDR q-value cutoff for defining differentially expressed genes")
+    parser.add_option('--sql_table', action='store', dest='sql_table', 
+                      default=config.get('MySQL', 'table'), help="Table to store results (other MySQL options specified in config file)")
+
+    opts, args = parser.parse_args()
+
+    if not (opts.dataset or opts.ontology or opts.annotation_files):
+        print_usage()
+        parser.print_help()
+        sys.exit(1)
+
+    file_or_accn = opts.dataset
+    ontology = opts.ontology
+    annotation_files = opts.annotation_files
+
+    FILTER_BY_SIZE = opts.filter_size
+    FILTER_BY_DEPTH = opts.filter_depth
+    FILTER_SIMILAR = opts.filter_similar
+
+    ANNO_MAX_SIZE = opts.max_size
+    ANNO_MIN_SIZE = opts.min_size
+
+    MAX_DEPTH = opts.max_depth
+    MIN_DEPTH = opts.min_depth
+
+    MIN_VARIANCE = opts.min_variance
+    
+    QVAL_CUTOFF = opts.max_fdr
+    NCORES = multiprocessing.cpu_count()
+
+    MAPFILE = 'data/uniprot2entrez.json'
+
+    # MySQL settings
+    MYUSER = config.get('MySQL', 'user')
+    MYHOST = config.get('MySQL', 'host')
+    MYPASS = config.get('MySQL', 'pass')
+    MYDB = config.get('MySQL', 'db')
+    table = opts.sql_table
+
+    # set SQL table to insert results into
+    store_results_sql = store_results_sql.format(table=table)
+    select_pvals_sql = select_pvals_sql.format(table=table)
+    insert_qval_sql = insert_qval_sql.format(table=table)
+
+    main(file_or_accn, annotation_files, ontology)
+
                                      
                     
                     
