@@ -3,7 +3,6 @@
 
 from __init__ import fetch
 from numpy import array
-from numpy import intersect1d
 from collections import defaultdict
 import json
 import scipy.stats as stats
@@ -15,7 +14,7 @@ import os
 UNIPROT = 'http://www.uniprot.org/mapping/'
 mapfile = 'data/uniprot2entrez.json'
 
-def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map, not_EASE=False):
+def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map, EASE=True):
     """
     Conducts a modified Fisher's exact test (aka EASE score) on the differentially 
     expressed genes and the provided gene list for the term. The test is modified
@@ -31,7 +30,7 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map, not_EASE
     not_diffexp: a list of genes *not* differentially expressed in the background
     background: all genes (often all genes tested by the probe set)
     term: a dict of the form {'name':'term name', 'genes':['1234','1235',...]}
-    not_EASE: do a traditional Fisher's exact test, not the EASE modification
+    EASE: if false, do a traditional Fisher's exact test, not the EASE modification
     """
 
     if not diffexp:
@@ -39,28 +38,31 @@ def _fexact(diffexp, not_diffexp, background, term, uniprot2entrez_map, not_EASE
 
     # convert Uniprot ids to Entrez Gene ids
     term_genes = map_uniprot(term['genes'], uniprot2entrez_map)
-    
 
+    # convert all to sets
+    term_genes = set(term_genes)
+    diffexp = set(diffexp)
+    not_diffexp = set(not_diffexp)
+    background = set(background)
+    
     # contingency table for fisher's exact test:
     # |  g_e - 1  | g_ne  |  (e = diff. expressed, ne = not diff. expressed,
     # +–––––-----–+–-–––––+   g = geneset,  ng = not geneset)
     # |    ng_e   | ng_ne |
 
-    if not_EASE:
-        g_e = len(intersect1d(term_genes, diffexp))
-    else:
-        g_e = len(intersect1d(term_genes, diffexp)) - 1
+    g_e = len(term_genes.intersection(diffexp))
+    g_e = g_e - 1 if EASE else g_e
 
     if g_e < 1:
         return 1.0
-    g_ne = len(intersect1d(term_genes, not_diffexp))
-    not_term_genes = [gene for gene in background if gene not in term_genes]
-    ng_e = len(intersect1d(not_term_genes, diffexp))
-    ng_ne = len(intersect1d(not_term_genes, not_diffexp))
+
+    g_ne = len(term_genes.intersection(not_diffexp)) 
+    not_term_genes = set([gene for gene in background if gene not in term_genes])
+    ng_e = len(not_term_genes.intersection(diffexp))
+    ng_ne = len(not_term_genes.intersection(not_diffexp))
     table = array([[g_e, g_ne], [ng_e, ng_ne]])
-    
+
     odds, pval = stats.fisher_exact(table, alternative='greater')
-    
     return pval
 
 
@@ -83,7 +85,7 @@ def map_uniprot(uniprots, uniprot2entrez_map):
 
 def map2entrez(platform, probes=None):
     """Returns the Entrez Gene ID for the probes. Some probes may not map (i.e,
-        controls, etc)- these are simply empty strings in the returned array.
+        controls, etc)- these are removed.
     """
     if 'ENTREZ_GENE_ID' in platform.table[0]:
         entrez_column = platform.table[0].index('ENTREZ_GENE_ID')
@@ -92,6 +94,8 @@ def map2entrez(platform, probes=None):
     else:
         raise ValueError('Cannot find Entrez mappings for this platform!')
     if probes == None:
-        return [x[entrez_column] for x in platform.table]
+        result = [x[entrez_column] for x in platform.table]
     else:
-        return [x[entrez_column] for x in platform.table if x[0] in probes]
+        result = [x[entrez_column] for x in platform.table if x[0] in probes]
+
+    return [x for x in result if x and '/' not in x]
