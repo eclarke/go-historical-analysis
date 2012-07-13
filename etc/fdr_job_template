@@ -5,7 +5,9 @@
 #PBS -j oe
 cd go                                                                                                                                                                               
 
-python {pyscript} -o BP {options} {gds} {anno_files}
-python {pyscript} -o MF {options} {gds} {anno_files}
-python {pyscript} -o CC {options} {gds} {anno_files}
+python {pyscript} {gds} BP {anno_files}
+python {pyscript} {gds} MF {anno_files}
+python {pyscript} {gds} CC {anno_files}
+
+
 

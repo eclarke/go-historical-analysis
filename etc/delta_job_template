@@ -1,11 +1,8 @@
-#PBS -l nodes={nodes}:ppn={ppn}
-#PBS -l mem=20gb
+#PBS -l nodes={nodes}
 #PBS -l walltime={hours}:00:00
 #PBS -N {name}
 #PBS -j oe
 cd go                                                                                                                                                                               
+python {pyscript} {options} {year} {outfile}
 
-python {pyscript} -o BP {options} {gds} {anno_files}
-python {pyscript} -o MF {options} {gds} {anno_files}
-python {pyscript} -o CC {options} {gds} {anno_files}
 
