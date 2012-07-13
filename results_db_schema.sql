@@ -16,12 +16,13 @@ create table results (
        anno_min	     int,
        min_depth     int,
        max_depth     int,
+       min_var	     int,
        filter_similar boolean,
        filter_size    boolean,
        filter_depth   boolean,
        shuffled	     float,
-       primary key (dataset, subset(50), year, ontology, goid, filter_similar, filter_size, filter_depth)
+       primary key (dataset, subset(50), year, ontology, goid)
 );
 
--- after everything has finished processing, 
--- recommend creating indexes around pval, qval, etc
+drop table if exists shuffled;
+create table shuffled like results;
