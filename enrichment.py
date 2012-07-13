@@ -20,21 +20,24 @@ from __init__ import fetch
 import enrichment_analysis as ea
 from Annotations import parse_flat
 
+
 # MySQL commands (reference results_db_schema.sql)
 set_isolation_level = """set session transaction isolation level read committed"""
 
+
 store_results_sql = """
-replace into {table} (ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max, min_depth, max_depth, min_var, filter_similar, filter_size, filter_depth)
- values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+replace into {table} (ontology, goid, term, pval, dataset, factor, subset, year, num_annos, num_genes, anno_min, anno_max, min_depth, max_depth, min_var, filter_similar, filter_size, filter_depth, shuffled)
+ values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 select_pvals_sql = """
-select goid, pval from {table} where dataset=%s and subset=%s and year=%s and ontology=%s
+select goid, pval from {table} where dataset=%s and subset=%s and year=%s and ontology=%s and shuffled=%s
 """
 
 insert_qval_sql = """
-update {table} set qval=%s where dataset=%s and subset=%s and year=%s and ontology=%s and goid=%s
+update {table} set qval=%s where dataset=%s and subset=%s and year=%s and ontology=%s and shuffled=%s and goid=%s
 """
+
 
 def split(iterable, blocks=8):
     if isinstance(iterable, dict):
@@ -127,7 +130,7 @@ def get_connection(max_retries=30):
 
 
 def store_in_db(fn):
-    def store(dataset, platform, factor, subset, annotations, year, num_annos, ontology, u2emap):
+    def store(dataset, platform, factor, subset, annotations, year, shuffled, num_annos, ontology, u2emap):
         results, diffexp = fn(dataset, platform, factor, subset, annotations, year, u2emap)
         p = multiprocessing.current_process()
         db = get_connection(100)
@@ -139,7 +142,7 @@ def store_in_db(fn):
                 _id = (dataset.id, factor, subset, year, ontology)
                 _subid =  _id+(goid,)
                 col_results.append((ontology, goid, annotations[goid]['name'], pval, dataset.id,
-                                    factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE, MIN_DEPTH, MAX_DEPTH, MIN_VARIANCE, FILTER_SIMILAR, FILTER_BY_SIZE, FILTER_BY_DEPTH))
+                                    factor, subset, year, num_annos, len(diffexp), ANNO_MIN_SIZE, ANNO_MAX_SIZE, MIN_DEPTH, MAX_DEPTH, MIN_VARIANCE, FILTER_SIMILAR, FILTER_BY_SIZE, FILTER_BY_DEPTH, shuffled))
             assert '{table}' not in store_results_sql
             c.executemany(store_results_sql, col_results)
             db.commit()
@@ -172,7 +175,7 @@ def enriched(dataset, platform, factor, subset, annotations,
         if pval < QVAL_CUTOFF:
             print "<{name}>: ({i}/{total}) {pval}\t{term}".format(name=p.name,
                                                                   i=i, pval=pval, 
-                                                                  term=term, 
+                                                                  term=annotations[term]['name'], 
                                                                   total=total)
         results[term] = pval
     return results, diffexp
@@ -184,10 +187,11 @@ def multitest_correction(dataset, ontology, annotation_files):
     db = get_connection(100)
     for annotations in annotation_years:
         year = annotations['meta']['year']
+        shuffled = annotations['meta']['shuffled'] if 'shuffled' in annotations['meta'] else 0.0
         for subset in dataset.factors[factor]:
-            print "[%s]-[%s]-[%s]-[%s]:" % (dataset.id, year, ontology, subset),
+            print "[%s]-[%s]-[%s]-[%s]-[%f]:" % (dataset.id, year, ontology, subset, shuffled),
             with closing(db.cursor()) as c:
-                _id = (dataset.id, factor, subset, year, ontology)
+                _id = (dataset.id, subset, year, ontology, shuffled)
                 print "selecting pvals... ",
                 c.execute(select_pvals_sql, _id)
                 results = list(c.fetchall())    # list of tuples [(_subid, pval), ...]
@@ -195,7 +199,7 @@ def multitest_correction(dataset, ontology, annotation_files):
             subids = [_id+(x[0],) for x in results]
             print "calculating FDR... ",
             rejected, qvals = multitest.fdrcorrection(pvals)
-            results = zip(qvals, subids)
+            results = [(qvals[i],)+subids[i] for i,v in enumerate(qvals)]
             with closing(db.cursor()) as c:
                 print "inserting %d qvals... " % len(results),
                 c.executemany(insert_qval_sql, results)
@@ -223,9 +227,20 @@ def main(file_or_accn, annotation_files, ontology):
 
     print("Detected %d cores, splitting into %d subprocesses..." % (NCORES, NCORES))
 
+    if FDR_CORRECTION:
+        jobs = []
+        for annofile in annotation_files:
+            p= Process(target=multitest_correction,
+                       args=(dataset, ontology, [annofile]))
+            jobs.append(p)
+            p.start()
+        [p.join() for p in jobs]
+        return
+
     for annotations in annotation_years:
         year = annotations['meta']['year']
         annos = annotations['anno']
+        shuffled_amnt = annotations['meta']['shuffled'] if 'shuffled' in annotations['meta'] else 0
         if FILTER_SIMILAR:
             print "Filtering out terms with less than a %d-gene difference from their parents" % MIN_VARIANCE
             annos = filter_similar_terms(annos, MIN_VARIANCE)
@@ -247,7 +262,7 @@ def main(file_or_accn, annotation_files, ontology):
             for block in blocks:
                 p = Process(target=enriched,
                             args=(dataset, platform, factor, subset, 
-                                  block, year, len(filtered_annotations), ontology, uniprot2entrez_map))
+                                  block, year, shuffled_amnt, len(filtered_annotations), ontology, uniprot2entrez_map))
                 jobs.append(p)
                 p.start()
             [p.join() for p in jobs] # wait for them all to finish
@@ -266,21 +281,20 @@ configs/settings.cfg."""
     print("\nSee README.md for more detailed information.\n")
 
 if __name__ == '__main__':
-    parser = OptionParser()
+    parser = OptionParser(usage='%prog [options] <GEO dataset> <annotation file 1 [anno file 2...]>')
     config = ConfigParser()
 
     if '--config' in sys.argv:
         cfg_file = sys.argv[sys.argv.index('--config')+1]
-        config.read(opts.config)
+        config.read(cfg_file)
     else:
         config.read("configs/settings.cfg")
 
     parser.add_option('--config', action='store', dest='config', default='configs/settings.cfg', help="Alternate configuration file")
-    parser.add_option('-d', action='store', dest='dataset', help="REQUIRED: Accession number of GEO dataset to analyze")
     parser.add_option('-o', action='store', type='choice', choices=['MF','CC','BP'], dest='ontology', help="REQUIRED: GO sub-ontology to use (MF, CC, BP)")
-    parser.add_option('-a', action='append', dest='annotation_files', help="REQUIRED: Annotation files (can specify multiple) in .json format")
+    parser.add_option('--fdr_correction', action='store_true', default=False, dest='fdrcorr', help="Calculate p-values instead of doing EA")
     parser.add_option('--use_shuffled', action='store_true', default=False, dest='shuffled', help="Work with shuffled annotations")
-    parser.add_option('--filter_by_size', action='store_true', default=True, dest='filter_size', 
+    parser.add_option('--filter_by_size', action='store_true', default=False, dest='filter_size', 
                       help="Filter out term that have more or less than the specified max and min gene set sizes")
     parser.add_option('--filter_by_depth', action='store_true', default=False, dest='filter_depth', 
                       help="Filter terms by ontology depth (terms above/below a certain depth are omitted)") 
@@ -303,14 +317,20 @@ if __name__ == '__main__':
 
     opts, args = parser.parse_args()
 
-    if not (opts.dataset or opts.ontology or opts.annotation_files):
+    if not opts.ontology:
         print_usage()
         parser.print_help()
         sys.exit(1)
 
-    file_or_accn = opts.dataset
+    file_or_accn = args[0]
+    annotation_files = args[1:]
+
+    print annotation_files
+
     ontology = opts.ontology
-    annotation_files = opts.annotation_files
+
+    SHUFFLED = opts.shuffled
+    FDR_CORRECTION = opts.fdrcorr
 
     FILTER_BY_SIZE = opts.filter_size
     FILTER_BY_DEPTH = opts.filter_depth
