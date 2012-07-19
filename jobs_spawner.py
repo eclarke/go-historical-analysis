@@ -26,7 +26,7 @@ def spawn(gds, config, dryrun):
     template = open(config.get('Job', 'template')).read()
     args = dict(config.items('Template')+config.items('Job'))
     args['gds'] = gds
-    outfile = config.get('Job', 'jobscript')
+    outfile = config.get('Job', 'jobscript').format(gds=gds)
     
     script_file = create_job_script(template, args, outfile)
 
@@ -37,6 +37,7 @@ def spawn(gds, config, dryrun):
 
 def create_job_script(script, args, outfile):
     script = script.format(**args)
+    script = script.format(**args) # repeat in case of nested format strings
     with open(outfile, 'wb') as out:
         out.write(script)
     return outfile
@@ -67,7 +68,22 @@ def main():
     for i, accn in enumerate(accessions):
         job, command = spawn(accn, config, args.dryrun)
         print "%s launched with command: '%s'" % (job, command)
+
+
+def alt_main():
+    parser = ArgumentParser(description="Spawn jobs on Garibaldi using the Torque queue system. Job options specified in config file.")
+    parser.add_argument('--config', action='store', dest="cfg_file", help="File with configuration options", default='configs/alt.job.settings.cfg')
+    parser.add_argument('--dryrun', action='store_true', default=False, dest="dryrun", help="Create job script in jobs/ but do not launch on cluster.")
+    parser.add_argument('start_year', action='store', type=int)
+    parser.add_argument('end_year', action='store', type=int)
+    args = parser.parse_args()
+
+    config = SafeConfigParser()
+    config.read(args.cfg_file)
     
+    for i in range(args.start_year, args.end_year+1):
+        job, command = spawn(year, config, args.dryrun)
+        print "%s launched with command: '%s'" % (job, command)
 
 if __name__ == "__main__":
     main()
