@@ -35,7 +35,8 @@ def dbconnect():
 def get_datasets(pval=0.01):
     db = dbconnect()
     with closing(db.cursor()) as c:
-        c.execute('SELECT distinct dataset FROM results WHERE pval < %s', (pval,))
+        c.execute('SELECT distinct dataset FROM results WHERE pval < %s', 
+            (pval,))
         datasets = [x[0] for x in c.fetchall()]
     db.close()
     return datasets
@@ -49,20 +50,28 @@ def insert_metadata(datasets):
                 dataset = fetch(ds)
                 did = dataset.id
                 desc = dataset.meta['description']
-                pmid = dataset.meta['pubmed_id'] if 'pubmed_id' in dataset.meta else None
+                pmid = dataset.meta.get('pubmed_id', None)
                 print "fetching abstract..."
-                abstract = Entrez.efetch(id=pmid, db='pubmed', rettype='abstract', retmode='text').read() if pmid else None
+                abstract = (Entrez.efetch(id=pmid, db='pubmed',
+                    rettype='abstract', retmode='text').read() 
+                    if pmid else None)
                 print "inserting metadata..."
-                c.execute("REPLACE INTO metadata VALUES(%s, %s, %s, %s);", (did, desc, pmid, abstract))
+                c.execute("REPLACE INTO metadata VALUES(%s, %s, %s, %s);", 
+                    (did, desc, pmid, abstract))
                 print "fetching annotations..."
                 desc_annos = annotate(desc)
                 
-                abst_annos = annotate(abstract.replace('\n',' ')) if abstract else None
+                abst_annos = (annotate(abstract.replace('\n', ' ')) 
+                    if abstract else None)
                 print "inserting annotations...",
-                desc_sql = "REPLACE INTO annotations(dataset, goid, term, source) values('%s', %%s, %%s, '%s')" % (did, 'description')
+                desc_sql = ("REPLACE INTO annotations(dataset, goid, term, "
+                    "source) values('%s', %%s, %%s, '%s')" 
+                    % (did, 'description'))
                 c.executemany(desc_sql, desc_annos)
                 if abstract:
-                    abst_sql = "REPLACE INTO annotations(dataset, goid, term, source) values('%s', %%s, %%s, '%s')" % (did, 'abstract')
+                    abst_sql = ("REPLACE INTO annotations(dataset, goid, term,"
+                        "source) values('%s', %%s, %%s, '%s')" 
+                        % (did, 'abstract'))
                     c.executemany(abst_sql, abst_annos)
                 db.commit()
                 print "done.\n"
@@ -70,29 +79,28 @@ def insert_metadata(datasets):
             
 
 def annotate(text):
-    GO_local_id = 46440
     GO_virtual_id = 1070
 
     params = {
-        'longestOnly':'false',
-        'wholeWordOnly':'true',
-        'withContext':'true',
-        'filterNumber':'true', 
-        'stopWords':'',
-        'withDefaultStopWords':'true', 
-        'isStopWordsCaseSenstive':'false', 
-        'minTermSize':'1', 
-        'scored':'true',  
-        'withSynonyms':'true', 
-        'ontologiesToExpand':'',   
+        'longestOnly': 'false',
+        'wholeWordOnly': 'true',
+        'withContext': 'true',
+        'filterNumber': 'true', 
+        'stopWords': '',
+        'withDefaultStopWords': 'true', 
+        'isStopWordsCaseSenstive': 'false', 
+        'minTermSize': '1', 
+        'scored': 'true',  
+        'withSynonyms': 'true', 
+        'ontologiesToExpand': '',   
         'ontologiesToKeepInResult': GO_virtual_id,   
-        'isVirtualOntologyId':'true', 
-        'semanticTypes':'',
-        'levelMax':'1',
-        'mappingTypes':'null', 
+        'isVirtualOntologyId': 'true', 
+        'semanticTypes': '',
+        'levelMax': '1',
+        'mappingTypes': 'null', 
         'textToAnnotate': text, 
-        'format':'tabDelimited',
-        'apikey':API_KEY,
+        'format': 'tabDelimited',
+        'apikey': API_KEY,
         }
 
     submitUrl = '%s/submit/%s' % (ANNO_URL, ANNO_EMAIL)
